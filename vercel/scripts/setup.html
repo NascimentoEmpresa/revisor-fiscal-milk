@@ -1,0 +1,20 @@
+<div class="pg" style="max-width:520px">
+  <div class="pg-top"><img src="{{LOGO}}" alt="Milk Advocacia"><div><h1>Instalação</h1><div class="small muted">Cria o primeiro administrador. Só funciona uma vez.</div></div></div>
+  <section class="cartao">
+    <form id="f" class="grade" style="grid-template-columns:1fr" autocomplete="off">
+      <label class="c">Código de instalação (SETUP_TOKEN)<input name="token" type="password" required></label>
+      <label class="c">Seu nome<input name="nome" required></label>
+      <label class="c">E-mail<input name="email" type="email" required></label>
+      <label class="c">Senha (mín. 10, letras e números)<input name="senha" type="password" minlength="10" required></label>
+      <button class="btn primary" type="submit">Instalar</button>
+    </form><div class="msg" id="m"></div>
+  </section>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit', function (e) {
+  e.preventDefault(); var f = e.target, m = document.getElementById('m');
+  fetch('/api/setup', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: f.token.value, nome: f.nome.value, email: f.email.value, senha: f.senha.value }) })
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+    .then(function (x) { m.className = 'msg ' + (x.ok ? 'ok' : 'err'); m.textContent = x.ok ? 'Pronto! Agora entre pelo login.' : (x.d.erro || 'Erro'); if (x.ok) setTimeout(function () { location.href = '/login'; }, 1200); });
+});
+</script>

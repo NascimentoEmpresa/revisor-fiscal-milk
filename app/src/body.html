@@ -1,0 +1,192 @@
+<div class="login" id="login" aria-label="Entrar no Revisor Fiscal">
+  <div class="login-veil"></div><canvas class="login-fx"></canvas>
+  <div class="login-box">
+    <img class="login-logo" src="{{MILK_LOGO}}" alt="Milk Advocacia">
+    <form class="login-form" id="login-form" novalidate>
+      <div class="login-tit">Revisor Fiscal</div>
+      <div class="lf"><label for="lg-email">E-mail</label><input id="lg-email" type="email" autocomplete="username" inputmode="email" spellcheck="false" required></div>
+      <div class="lf"><label for="lg-senha">Senha</label><div class="pw"><input id="lg-senha" type="password" autocomplete="current-password" required><button class="pw-eye" type="button" aria-label="Mostrar a senha" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+      <div class="lg-err" id="lg-err" role="alert"></div>
+      <button class="btn primary big" id="lg-entrar" type="button">Entrar</button>
+    </form>
+  </div>
+</div>
+<header class="top" id="top">
+  <div class="brand" id="brand">
+    <div class="brand-mark" aria-hidden="true">RF</div>
+    <img class="brand-logo" id="brand-logo" alt="Logotipo do escritório">
+    <div>
+      <div class="brand-name">Revisor Fiscal</div>
+      <div class="brand-sub label typing" aria-label="Milk Advocacia"><span style="--i:0">M</span><span style="--i:1">I</span><span style="--i:2">L</span><span style="--i:3">K</span><span style="--i:4">&nbsp;</span><span style="--i:5">A</span><span style="--i:6">D</span><span style="--i:7">V</span><span style="--i:8">O</span><span style="--i:9">C</span><span style="--i:10">A</span><span style="--i:11">C</span><span style="--i:12">I</span><span style="--i:13">A</span></div>
+    </div>
+  </div>
+  <div class="company" id="company"></div>
+  <div class="actions">
+    <button class="btn primary" id="btn-import" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      <span>Importar planilhas</span>
+    </button>
+    <button class="avatar-btn" id="btn-perfil-top" type="button" aria-label="Abrir o perfil"><span class="avatar sm" data-avatar></span></button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail" aria-label="Etapas">
+    <div class="rail-label label">Etapas</div>
+    <button class="step" data-view="importar" type="button"><span class="step-n">1</span><span>Importar</span><span></span></button>
+    <button class="step" data-view="painel" type="button"><span class="step-n">2</span><span>Painel</span><span></span></button>
+    <button class="step" data-view="classificar" type="button"><span class="step-n">3</span><span>Classificação</span><span class="step-badge" id="badge-cls"></span></button>
+    <button class="step" data-view="checklist" type="button"><span class="step-n">4</span><span>Checklist</span><span class="step-badge" id="badge-ck"></span></button>
+    <button class="step" data-view="exportar" type="button"><span class="step-n">5</span><span>Exportar</span><span></span></button>
+    <div class="rail-foot">
+      <button class="profile-btn" id="btn-perfil" type="button" aria-haspopup="dialog">
+        <span class="avatar" data-avatar></span>
+        <span class="pf-txt"><b id="pf-nome">Seu perfil</b><span id="pf-cargo">Personalizar</span></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <main class="main" id="main">
+    <div class="wrap" id="view" aria-live="polite"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Detalhes do grupo"></aside>
+<aside class="drawer left" id="perfil" role="dialog" aria-hidden="true" aria-label="Perfil"></aside>
+<div class="tip" id="tip" role="tooltip"></div>
+<div class="toast" id="toast" role="status"></div>
+<input type="file" id="file" accept=".xlsx,.xls,.xlsm" multiple hidden>
+<input type="file" id="foto-file" accept="image/*,.jpg,.jpeg,.png,.webp,.jfif" hidden>
+<script>
+/* entrada: o símbolo da Milk rola da esquerda até o meio, aparecem e-mail e senha e o resto da tela fica desfocado.
+   Com o acesso certo, o símbolo fica 1,5 s no meio e se desfaz em partículas. Acesso de demonstração, conferido aqui
+   mesmo (só o resumo SHA-256 fica no código); a versão com banco de dados terá login no servidor. */
+(function () {
+  var L = document.getElementById('login'); if (!L) return;
+  /* Versão com servidor (Vercel): o login acontece em /login, antes de a página carregar. Aqui só fica o "Sair". */
+  if (window.RF_SERVIDOR) {
+    L.remove();
+    window.RFLogin = { sair: function () { fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(function () { location.href = '/login'; }); } };
+    return;
+  }
+  var CHAVE = 'f24be77ca6e180e01bec64a65de236503cc9a2198f3fef8d7ee38869122bbece';
+  var form = document.getElementById('login-form'), em = document.getElementById('lg-email'), pw = document.getElementById('lg-senha'), err = document.getElementById('lg-err');
+  var img = L.querySelector('.login-logo'), cv = L.querySelector('.login-fx'), veil = L.querySelector('.login-veil'), eye = L.querySelector('.pw-eye');
+  var saindo = false, vez = 0;
+  try { var th = localStorage.getItem('revisor-fiscal-tema'); if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th); } catch (e) { /* */ }
+  function trava(on) { [document.getElementById('top'), document.querySelector('.shell')].forEach(function (e) { if (e) { if (on) e.setAttribute('inert', ''); else e.removeAttribute('inert'); } }); }
+  function sha256hex(str) {
+    var rr = function (v, n) { return (v >>> n) | (v << (32 - n)); }, K = [], H = [], n = 2, c = 0, f, p;
+    while (c < 64) { for (p = true, f = 2; f * f <= n; f++) if (n % f === 0) { p = false; break; } if (p) { if (c < 8) H[c] = (Math.pow(n, 1 / 2) * 4294967296) | 0; K[c++] = (Math.pow(n, 1 / 3) * 4294967296) | 0; } n++; }
+    var b = new TextEncoder().encode(str), l = b.length, tot = ((l + 8) >> 6 << 4) + 16, w = [], i, j;
+    for (i = 0; i < tot; i++) w[i] = 0;
+    for (i = 0; i < l; i++) w[i >> 2] |= b[i] << (24 - (i % 4) * 8);
+    w[l >> 2] |= 0x80 << (24 - (l % 4) * 8); w[tot - 1] = l * 8;
+    for (j = 0; j < tot; j += 16) {
+      var W = w.slice(j, j + 16), h = H.slice();
+      for (i = 0; i < 64; i++) {
+        if (i >= 16) { var a15 = W[i - 15], a2 = W[i - 2]; W[i] = (W[i - 16] + (rr(a15, 7) ^ rr(a15, 18) ^ (a15 >>> 3)) + W[i - 7] + (rr(a2, 17) ^ rr(a2, 19) ^ (a2 >>> 10))) | 0; }
+        var e = h[4], a = h[0], t1 = (h[7] + (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) + ((e & h[5]) ^ (~e & h[6])) + K[i] + W[i]) | 0, t2 = ((rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) + ((a & h[1]) ^ (a & h[2]) ^ (h[1] & h[2]))) | 0;
+        h.unshift((t1 + t2) | 0); h[4] = (h[4] + t1) | 0; h.pop();
+      }
+      for (i = 0; i < 8; i++) H[i] = (H[i] + h[i]) | 0;
+    }
+    return H.map(function (x) { return ('00000000' + (x >>> 0).toString(16)).slice(-8); }).join('');
+  }
+  function mostrar() {
+    saindo = false; L.hidden = false; L.className = 'login'; form.reset(); err.textContent = ''; img.style.visibility = ''; veil.style.opacity = '';
+    var g = cv.getContext && cv.getContext('2d'); if (g) g.clearRect(0, 0, cv.width, cv.height);
+    trava(true); var minha = ++vez;
+    quandoNaTela(function () { // só começa quando a página está de fato aparecendo (o painel do Claude pode abrir depois de carregar)
+      if (minha !== vez || L.hidden) return;
+      void L.offsetWidth; L.classList.add('in');
+      setTimeout(function () { if (minha === vez && !saindo) try { em.focus({ preventScroll: true }); } catch (e) { em.focus(); } }, 1900);
+    });
+  }
+  function quandoNaTela(cb) {
+    /* A página publicada fica invisível até terminar de carregar (o Claude só a mostra no "load"), então a animação
+       espera: página carregada + 0,4 s, aba visível e o quadro de fato na tela. */
+    var feito = false, io = null, naTela = !('IntersectionObserver' in window), carregou = false;
+    function vai() { if (feito) return; feito = true; if (io) io.disconnect(); document.removeEventListener('visibilitychange', tenta);
+      var pronto = img.decode ? img.decode().catch(function () {}) : Promise.resolve();
+      pronto.then(function () { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(cb, 60); }); }); }); }
+    function tenta() { if (carregou && naTela && document.visibilityState === 'visible') vai(); }
+    if (!naTela) { io = new IntersectionObserver(function (es) { naTela = es.some(function (x) { return x.isIntersecting && x.intersectionRatio > 0.2; }); tenta(); }, { threshold: [0, 0.25, 0.5] }); io.observe(L.querySelector('.login-box')); }
+    function aposCarga() { setTimeout(function () { carregou = true; tenta(); setTimeout(function () { naTela = true; tenta(); }, 3000); }, 400); }
+    if (document.readyState === 'complete') aposCarga(); else window.addEventListener('load', aposCarga, { once: true });
+    document.addEventListener('visibilitychange', tenta);
+  }
+  function fim() { L.hidden = true; L.className = 'login'; trava(false); var b = document.getElementById('btn-import'); if (b) b.focus({ preventScroll: true }); }
+  function some() { L.classList.add('out'); setTimeout(fim, 450); }
+  function desfazer() { // 2ª animação: o símbolo se desfaz em partículas, da esquerda para a direita, e a tela desembaça
+    setTimeout(function () { if (!L.hidden) fim(); }, 4000); // garantia: o sistema sempre fica liberado
+    try { particulas(); } catch (e) { img.style.visibility = ''; some(); }
+  }
+  function particulas() {
+    var r = img.getBoundingClientRect(); if (!r.width || !cv.getContext) { some(); return; }
+    var dpr = Math.min(2, window.devicePixelRatio || 1), Wd = innerWidth, Ht = innerHeight;
+    cv.width = Math.round(Wd * dpr); cv.height = Math.round(Ht * dpr);
+    var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // copia o símbolo como aparece (disco + letras, já com o filtro do tema escuro) e vira grãos com a cor de cada ponto
+    var N = 104, off = document.createElement('canvas'); off.width = off.height = N;
+    var o = off.getContext('2d'), cs = getComputedStyle(img);
+    if (cs.filter && cs.filter !== 'none' && 'filter' in o) o.filter = cs.filter;
+    o.fillStyle = cs.backgroundColor || '#fff'; o.beginPath(); o.arc(N / 2, N / 2, N / 2, 0, Math.PI * 2); o.fill();
+    o.drawImage(img, 0, 0, N, N);
+    var px = o.getImageData(0, 0, N, N).data, cell = r.width / N, grupos = {}, DUR = 950, SWEEP = 820;
+    for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+      var k4 = (y * N + x) * 4, al = px[k4 + 3]; if (al < 30) continue;
+      var cor = 'rgb(' + (px[k4] >> 3 << 3) + ',' + (px[k4 + 1] >> 3 << 3) + ',' + (px[k4 + 2] >> 3 << 3) + ')';
+      (grupos[cor] || (grupos[cor] = [])).push({ x: r.left + x * cell, y: r.top + y * cell, a: al / 255, d: x / N * SWEEP + Math.random() * 260,
+        vx: 70 + Math.random() * 190, vy: -(30 + Math.random() * 150), w: Math.random() * 6.3, s: .6 + Math.random() * .9 });
+    }
+    var cores = Object.keys(grupos), t0 = performance.now(), FIM = SWEEP + 260 + DUR; img.style.visibility = 'hidden';
+    (function frame(now) {
+      var td = now - t0; g.clearRect(0, 0, Wd, Ht);
+      for (var c = 0; c < cores.length; c++) {
+        var P = grupos[cores[c]]; g.fillStyle = cores[c];
+        for (var i = 0; i < P.length; i++) {
+          var q = P[i], k = (td - q.d) / DUR; if (k >= 1) continue;
+          if (k <= 0) { g.globalAlpha = q.a; g.fillRect(q.x, q.y, cell + .5, cell + .5); continue; }
+          var e = k * k * (3 - 2 * k), sz = cell * (1 + .6 * q.s * Math.sin(k * Math.PI)) * (1 - .55 * k);
+          g.globalAlpha = q.a * (1 - k) * (1 - k * .4);
+          g.fillRect(q.x + q.vx * e + Math.sin(q.w + k * 6) * 9 * k, q.y + q.vy * e + 40 * k * k, sz, sz);
+        }
+      }
+      g.globalAlpha = 1;
+      if (td > SWEEP * .9) veil.style.opacity = Math.max(0, 1 - (td - SWEEP * .9) / (FIM - SWEEP * .9));
+      if (td >= FIM) { g.clearRect(0, 0, Wd, Ht); fim(); return; }
+      requestAnimationFrame(frame);
+    })(t0);
+  }
+  /* Sem envio de formulário: a página publicada roda num quadro protegido (sandbox) que bloqueia "submit" sem avisar.
+     O acesso é conferido no clique em Entrar e no Enter dos campos. */
+  function entrar() {
+    if (saindo) return;
+    if (!em.value.trim()) { err.textContent = 'Digite o e-mail.'; em.focus(); return; }
+    if (!pw.value) { err.textContent = 'Digite a senha.'; pw.focus(); return; }
+    if (sha256hex(em.value.trim().toLowerCase() + '\n' + pw.value) === CHAVE) {
+      saindo = true; err.textContent = '';
+      if (document.activeElement) document.activeElement.blur();
+      L.classList.add('ok'); setTimeout(desfazer, 1500);
+    } else {
+      err.textContent = 'E-mail ou senha incorretos.'; form.classList.remove('shake'); void form.offsetWidth; form.classList.add('shake');
+      pw.value = ''; pw.focus();
+    }
+  }
+  document.getElementById('lg-entrar').addEventListener('click', function (e) { e.preventDefault(); entrar(); });
+  [em, pw].forEach(function (inp) {
+    inp.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' || e.isComposing) return; e.preventDefault();
+      if (inp === em && !pw.value) pw.focus(); else entrar();
+    });
+    inp.addEventListener('input', function () { if (err.textContent) err.textContent = ''; });
+  });
+  form.addEventListener('submit', function (e) { e.preventDefault(); entrar(); });
+  eye.addEventListener('click', function () { var v = pw.type === 'password'; pw.type = v ? 'text' : 'password'; eye.setAttribute('aria-pressed', String(v)); eye.setAttribute('aria-label', v ? 'Esconder a senha' : 'Mostrar a senha'); pw.focus(); });
+  window.RFLogin = { sair: mostrar };
+  mostrar(); // toda vez que o sistema abre: símbolo da Milk, login e senha
+})();
+</script>

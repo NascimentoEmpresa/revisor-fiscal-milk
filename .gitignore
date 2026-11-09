@@ -1,0 +1,7 @@
+node_modules/
+.vercel/
+.env*
+app/dist/
+app/test/carga/*.xlsx
+app/test/carga/pagina.html
+*.log
