@@ -1,14 +1,40 @@
 <div class="pg">
   <div class="pg-top"><img src="{{LOGO}}" alt="Milk Advocacia"><div><h1>Usuários</h1><div class="small muted">Quem pode entrar no Revisor Fiscal</div></div><span class="sp"></span><a class="btn" href="/">Voltar ao sistema</a></div>
-  <section class="cartao"><h2>Novo usuário</h2>
+
+  <section class="cartao" id="c-novo"><h2>Novo usuário</h2>
     <form id="novo" class="grade" autocomplete="off">
       <label class="c">Nome<input name="nome" required maxlength="160"></label>
       <label class="c">E-mail<input name="email" type="email" required maxlength="200"></label>
       <label class="c">Perfil<select name="papel"><option value="analista">Analista</option><option value="admin">Administrador</option></select></label>
       <label class="c">Senha provisória<input name="senha" type="text" minlength="10" required placeholder="mín. 10, letras e números"></label>
+      <label class="c">Cargo<input name="cargo" maxlength="120"></label>
+      <label class="c">OAB<input name="oab" maxlength="40"></label>
+      <label class="c">Telefone<input name="telefone" maxlength="40"></label>
+      <label class="c">Escritório<input name="escritorio" maxlength="160"></label>
+      <label class="c">Cidade<input name="cidade" maxlength="120"></label>
       <div style="align-self:end"><button class="btn primary" type="submit">Criar</button></div>
     </form><div class="msg" id="m-novo"></div>
   </section>
+
+  <section class="cartao" id="c-editar" hidden><h2 id="ed-titulo">Editar usuário</h2>
+    <form id="editar" class="grade" autocomplete="off">
+      <input type="hidden" name="id">
+      <label class="c">Nome<input name="nome" required maxlength="160"></label>
+      <label class="c">E-mail<input name="email" type="email" required maxlength="200"></label>
+      <label class="c">Perfil<select name="papel"><option value="analista">Analista</option><option value="admin">Administrador</option></select></label>
+      <label class="c">Situação<select name="ativo"><option value="true">Ativo</option><option value="false">Desativado</option></select></label>
+      <label class="c">Cargo<input name="cargo" maxlength="120"></label>
+      <label class="c">OAB<input name="oab" maxlength="40"></label>
+      <label class="c">Telefone<input name="telefone" maxlength="40"></label>
+      <label class="c">Escritório<input name="escritorio" maxlength="160"></label>
+      <label class="c">Cidade<input name="cidade" maxlength="120"></label>
+      <label class="c">Nova senha provisória (opcional)<input name="senha" type="text" minlength="10" placeholder="deixe vazio para manter"></label>
+      <div class="acoes" style="align-self:end"><button class="btn primary" type="submit">Salvar</button><button class="btn" type="button" id="ed-cancelar">Cancelar</button></div>
+    </form>
+    <div class="small muted" style="margin-top:8px">Mudar e-mail, perfil, senha ou desativar encerra as sessões abertas dessa pessoa.</div>
+    <div class="msg" id="m-editar"></div>
+  </section>
+
   <section class="cartao"><h2>Usuários cadastrados</h2>
     <table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th></th></tr></thead><tbody id="lista"><tr><td colspan="6">Carregando…</td></tr></tbody></table>
     <div class="msg" id="m-lista"></div>
@@ -18,33 +44,62 @@
 (function () {
   var $ = function (s) { return document.querySelector(s); };
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); };
-  function api(metodo, corpo) {
-    return fetch('/api/admin/usuarios', { method: metodo, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: corpo ? JSON.stringify(corpo) : undefined })
-      .then(function (r) { if (r.status === 401) { location.href = '/login'; throw new Error('sessão'); } return r.json().then(function (d) { if (!r.ok) throw new Error(d.erro || 'Erro'); return d; }); });
+  var CAMPOS = ['nome', 'email', 'cargo', 'oab', 'telefone', 'escritorio', 'cidade'];
+  var usuarios = [], eu = null;
+  function api(metodo, corpo, url) {
+    return fetch(url || '/api/admin/usuarios', { method: metodo, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: corpo ? JSON.stringify(corpo) : undefined })
+      .then(function (r) { if (r.status === 401) { location.href = '/login'; throw new Error('Sessão expirada.'); } return r.json().then(function (d) { if (!r.ok) throw new Error(d.erro || 'Erro'); return d; }); });
   }
   function msg(id, t, ok) { var e = $(id); e.textContent = t; e.className = 'msg ' + (ok ? 'ok' : 'err'); }
   function carregar() {
-    api('GET').then(function (us) {
+    return api('GET').then(function (us) {
+      usuarios = us;
       $('#lista').innerHTML = us.map(function (u) {
-        return '<tr><td>' + esc(u.nome) + '</td><td>' + esc(u.email) + '</td><td>' + (u.papel === 'admin' ? 'Administrador' : 'Analista') + '</td><td><span class="tag' + (u.ativo ? '' : ' off') + '">' + (u.ativo ? 'Ativo' : 'Desativado') + '</span></td><td>' + (u.ultimo_login ? new Date(u.ultimo_login).toLocaleString('pt-BR') : '—') + '</td>' +
-          '<td><div class="acoes"><button class="btn" data-a="ativo" data-id="' + u.id + '" data-v="' + (!u.ativo) + '">' + (u.ativo ? 'Desativar' : 'Reativar') + '</button><button class="btn" data-a="senha" data-id="' + u.id + '">Nova senha</button><button class="btn" data-a="papel" data-id="' + u.id + '" data-v="' + (u.papel === 'admin' ? 'analista' : 'admin') + '">' + (u.papel === 'admin' ? 'Tornar analista' : 'Tornar admin') + '</button></div></td></tr>';
-      }).join('');
+        var euMesmo = eu && u.id === eu.id;
+        return '<tr><td>' + esc(u.nome) + (euMesmo ? ' <span class="tag">você</span>' : '') + '</td><td>' + esc(u.email) + '</td><td>' + (u.papel === 'admin' ? 'Administrador' : 'Analista') + '</td><td><span class="tag' + (u.ativo ? '' : ' off') + '">' + (u.ativo ? 'Ativo' : 'Desativado') + '</span></td><td>' + (u.ultimo_login ? new Date(u.ultimo_login).toLocaleString('pt-BR') : '—') + '</td>' +
+          '<td><div class="acoes"><button class="btn" data-a="editar" data-id="' + u.id + '">Editar</button>' +
+          '<button class="btn" data-a="ativo" data-id="' + u.id + '" data-v="' + (!u.ativo) + '">' + (u.ativo ? 'Desativar' : 'Reativar') + '</button>' +
+          (euMesmo ? '' : '<button class="btn" data-a="excluir" data-id="' + u.id + '">Excluir</button>') + '</div></td></tr>';
+      }).join('') || '<tr><td colspan="6">Nenhum usuário.</td></tr>';
     }).catch(function (e) { msg('#m-lista', e.message); });
   }
+  function abrirEdicao(u) {
+    var f = $('#editar');
+    f.id.value = u.id; CAMPOS.forEach(function (k) { f[k].value = u[k] || ''; });
+    f.papel.value = u.papel; f.ativo.value = String(u.ativo); f.senha.value = '';
+    $('#ed-titulo').textContent = 'Editar ' + u.nome; $('#m-editar').textContent = '';
+    $('#c-editar').hidden = false; $('#c-editar').scrollIntoView({ behavior: 'smooth', block: 'start' }); f.nome.focus();
+  }
+  function fecharEdicao() { $('#c-editar').hidden = true; }
+
   $('#novo').addEventListener('submit', function (e) {
-    e.preventDefault(); var f = e.target;
-    api('POST', { nome: f.nome.value, email: f.email.value, papel: f.papel.value, senha: f.senha.value })
-      .then(function () { f.reset(); msg('#m-novo', 'Usuário criado. Passe a senha provisória pessoalmente ou por um canal seguro.', true); carregar(); })
+    e.preventDefault(); var f = e.target, c = { papel: f.papel.value, senha: f.senha.value };
+    CAMPOS.forEach(function (k) { c[k] = f[k].value; });
+    api('POST', c).then(function () { f.reset(); msg('#m-novo', 'Usuário criado. Passe a senha provisória pessoalmente ou por um canal seguro.', true); carregar(); })
       .catch(function (er) { msg('#m-novo', er.message); });
   });
+  $('#editar').addEventListener('submit', function (e) {
+    e.preventDefault(); var f = e.target, c = { id: Number(f.id.value), papel: f.papel.value, ativo: f.ativo.value === 'true' };
+    CAMPOS.forEach(function (k) { c[k] = f[k].value; });
+    if (f.senha.value) c.senha = f.senha.value;
+    api('PATCH', c).then(function () {
+      fecharEdicao(); msg('#m-lista', 'Alterações salvas.', true);
+      if (eu && c.id === eu.id && (c.email.toLowerCase() !== eu.email || c.papel !== eu.papel || c.senha)) { location.href = '/login'; return; } // a própria sessão foi encerrada
+      carregar();
+    }).catch(function (er) { msg('#m-editar', er.message); });
+  });
+  $('#ed-cancelar').addEventListener('click', fecharEdicao);
   $('#lista').addEventListener('click', function (e) {
     var b = e.target.closest('button[data-a]'); if (!b) return;
-    var c = { id: Number(b.dataset.id) };
-    if (b.dataset.a === 'ativo') c.ativo = b.dataset.v === 'true';
-    if (b.dataset.a === 'papel') c.papel = b.dataset.v;
-    if (b.dataset.a === 'senha') { var s = prompt('Nova senha provisória (mín. 10 caracteres, letras e números):'); if (!s) return; c.senha = s; }
-    api('PATCH', c).then(function () { msg('#m-lista', 'Alteração salva.', true); carregar(); }).catch(function (er) { msg('#m-lista', er.message); });
+    var id = Number(b.dataset.id), u = usuarios.filter(function (x) { return x.id === id; })[0]; if (!u) return;
+    if (b.dataset.a === 'editar') return abrirEdicao(u);
+    if (b.dataset.a === 'ativo') return api('PATCH', { id: id, ativo: b.dataset.v === 'true' }).then(function () { msg('#m-lista', 'Alteração salva.', true); carregar(); }).catch(function (er) { msg('#m-lista', er.message); });
+    if (b.dataset.a === 'excluir') {
+      // confirmação na própria tela: o primeiro clique arma, o segundo (em até 5 s) exclui
+      if (!b.dataset.armado) { b.dataset.armado = '1'; b.textContent = 'Confirmar exclusão'; b.classList.add('perigo'); msg('#m-lista', 'Clique de novo em "Confirmar exclusão" para excluir ' + u.nome + '. Isso não pode ser desfeito.'); setTimeout(function () { if (b.isConnected) { delete b.dataset.armado; b.textContent = 'Excluir'; b.classList.remove('perigo'); } }, 5000); return; }
+      api('DELETE', { id: id }).then(function () { msg('#m-lista', u.nome + ' foi excluído.', true); if (!$('#c-editar').hidden && Number($('#editar').id.value) === id) fecharEdicao(); carregar(); }).catch(function (er) { msg('#m-lista', er.message); });
+    }
   });
-  carregar();
+  api('GET', null, '/api/auth/me').then(function (u) { eu = u; }).catch(function () {}).then(carregar);
 })();
 </script>

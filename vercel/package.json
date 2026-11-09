@@ -7,7 +7,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "build:front": "python3 scripts/montar_front.py",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",

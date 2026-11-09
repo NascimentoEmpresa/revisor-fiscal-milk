@@ -12,3 +12,6 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .msg{min-height:20px;font-size:13px;font-weight:600;margin-top:10px}.msg.err{color:var(--risk)}.msg.ok{color:#1c7a55}
 .acoes{display:flex;gap:6px;flex-wrap:wrap}.acoes .btn{padding:6px 10px;font-size:12px}
 @media(max-width:640px){th:nth-child(3),td:nth-child(3),th:nth-child(5),td:nth-child(5){display:none}}
+.btn.perigo{background:var(--risk);color:#fff;border-color:var(--risk)}
+label.c{min-width:0}
+label.c input,label.c select{width:100%;min-width:0;box-sizing:border-box}
