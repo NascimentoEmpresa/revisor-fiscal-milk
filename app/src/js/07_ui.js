@@ -566,7 +566,7 @@ function refreshClsHeader() { const y = window.scrollY; render(); window.scrollT
 async function gerarXlsx(t, onProg) {
   const atual = S.tipo, troca = t !== atual;
   if (troca) ativarAnalise(t);
-  try { return { nome: arquivoXlsx(t), blob: await buildWorkbook(onProg) }; }
+  try { const r = { nome: arquivoXlsx(t), blob: await buildWorkbook(onProg) }; if (abasDivididas().length) toast('Atenção: ' + avisoDivisao(), 9000); return r; }
   finally { if (troca) ativarAnalise(atual); }
 }
 async function gerarWord(t) {

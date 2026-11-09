@@ -2265,7 +2265,14 @@ const XS = { // índices de cellXfs (ver styles.xml abaixo)
 const XL_LINHAS = 1048576, XL_DADOS = XL_LINHAS - 2;
 const parteNome = (nome, k) => k === 1 ? nome : (nome.length > 26 ? nome.slice(0, 26).trim() : nome) + ' (' + k + ')';
 const partesDe = (nome, n) => { const out = []; const q = Math.max(1, Math.ceil(n / XL_DADOS)); for (let k = 1; k <= q; k++) out.push({ nome: parteNome(nome, k), linhas: Math.min(XL_DADOS, n - (k - 1) * XL_DADOS) }); return out; };
-const BLANK = Object.freeze({ blank: true }); // célula com texto vazio: a exportação do SistemaMA traz as células vazias assim
+const BLANK = Object.freeze({ blank: true });
+/* abas de dados que passam do limite e saem divididas, na análise que está na tela */
+function abasDivididas() {
+  const sai = S.tipo === 'SAI', M = MODES[S.tipo];
+  const l = sai ? [[M.base, S.recs.length], [M.alvo, S.com.length], [M.outra, S.sem.length]] : [[M.base, S.recs.length], [M.outra, S.com.length], [M.alvo, S.alvo.length]];
+  return l.filter(x => x[1] > XL_DADOS).map(([nome, n]) => ({ nome, n, partes: Math.ceil(n / XL_DADOS) }));
+}
+const avisoDivisao = () => abasDivididas().map(d => 'a aba ' + d.nome + ' (' + fNum(d.n) + ' linhas) foi dividida em ' + d.partes + ' abas').join('; ') + ', porque o Excel aceita no máximo 1.048.576 linhas por aba. Cada parte tem as próprias tabelas dinâmicas, com os dados dela.'; // célula com texto vazio: a exportação do SistemaMA traz as células vazias assim
 const colName = (() => { const c = []; return i => c[i] || (c[i] = (function (n) { let s = ''; n++; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; })(i)); })();
 const xmlEsc = s => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -2730,7 +2737,14 @@ async function buildWorkbook(onProgress) {
   const fA = baseCols.findIndex(c => c.k === 'ano'), fM = baseCols.findIndex(c => c.k === 'mes');
   const fReg = colIdx('registro'), fBc = colIdx('bcPis'), fPis = colIdx('vlrPis'), fCof = colIdx('vlrCof');
   const heads = baseCols.map(c => c.h), bval = (rec, fi) => valOf(rec, baseCols[fi]);
-  const pcBase = new PivotCache(BASE, heads, S.recs, bval, { blankEmpty: true });
+  // Base acima do limite do Excel: cada parte ("NOME (2)"…) ganha as mesmas tabelas dinâmicas da parte 1, sobre os dados
+  // dela, com um aviso embaixo. Com uma parte só, tudo fica exatamente como antes (mesmos nomes e caches).
+  const fatias = (nome, list) => { const q = Math.max(1, Math.ceil(list.length / XL_DADOS)); return partesDe(nome, list.length).map((pt, k) => ({ nome: pt.nome, k: k + 1, q, recs: q > 1 ? list.slice(k * XL_DADOS, k * XL_DADOS + pt.linhas) : list })); };
+  const comAviso = (sh, f, nome, n) => {
+    if (f.q < 2) return sh;
+    const txt = 'Atenção: parte ' + f.k + ' de ' + f.q + '. Esta tabela dinâmica usa só os dados da aba "' + f.nome + '". A aba ' + nome + ' tem ' + fNum(n) + ' linhas e foi dividida em ' + f.q + ' abas porque o Excel aceita no máximo 1.048.576 linhas por aba. Some as partes para o total geral.';
+    const orig = sh.rows; return Object.assign({}, sh, { rows: async (emit, y) => { await orig(emit, y); emit([]); emit([{ v: txt, s: XS.note }]); } });
+  };
   const dat3 = [{ fi: fBc, name: 'Soma de Vlr Base Cálculo PIS' }, { fi: fPis, name: 'Soma de Vlr PIS' }, { fi: fCof, name: 'Soma de Vlr Cofins' }];
   const pivTab = (name, p, colA) => ({ name, grid: false, cols: [colA, 26.71, 14.86, 17.86], colStyles: [0, XS.eBrl, XS.eBrl, XS.eBrl], rows: p.rows, pivot: p.pivot });
   const larg = (list, fi) => { let mx = 16; for (const v of list) mx = Math.max(mx, String(v == null ? '' : v).length); return Math.min(80, Math.max(18, +(mx * 0.945).toFixed(2))); };
@@ -2740,32 +2754,47 @@ async function buildWorkbook(onProgress) {
     // 047: as abas e dinâmicas do Excel final da analista, na mesma ordem
     const fMod = baseCols.findIndex(c => c.k === 'modelo'), fCfop = colIdx('cfop');
     let nT = 0; const nomeT = () => 'Tabela dinâmica' + (++nT);
-    const pR = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fReg], data: dat3, numFmt: 165 });
-    B.addSheet(pivTab('REGISTRO', pR, larg(pcBase.distinct(fReg), fReg)));
-    if (fMod >= 0) { const pM = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fMod], data: dat3, numFmt: 165 }); B.addSheet(pivTab('MODELO', pM, 18)); }
-    const pC = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fCfop], data: dat3, numFmt: 165 }); B.addSheet(pivTab('CFOP', pC, 18));
-    const pcCom = new PivotCache(ALVO, heads, S.com, bval, { blankEmpty: true }), pcSem = new PivotCache(OUTRA, heads, S.sem, bval, { blankEmpty: true });
-    if (S.com.length) { const p = pivotSheet(pcCom, { name: nomeT(), top: true, rows: [ncmPos], data: dat3, numFmt: 165, sortAsc: true, sortBy: 1 }); B.addSheet({ ...pivTab('DIN NCM COM PC - ORDEM CRESCENT', p, 18), colStyles: null }); }
+    for (const f of fatias(BASE, S.recs)) {
+      const pcBase = new PivotCache(f.nome, heads, f.recs, bval, { blankEmpty: true }), av = sh => comAviso(sh, f, BASE, S.recs.length);
+      const pR = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fReg], data: dat3, numFmt: 165 });
+      B.addSheet(av(pivTab(parteNome('REGISTRO', f.k), pR, larg(pcBase.distinct(fReg), fReg))));
+      if (fMod >= 0) { const pM = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fMod], data: dat3, numFmt: 165 }); B.addSheet(av(pivTab(parteNome('MODELO', f.k), pM, 18))); }
+      const pC = pivotSheet(pcBase, { name: nomeT(), top: true, rows: [fCfop], data: dat3, numFmt: 165 }); B.addSheet(av(pivTab(parteNome('CFOP', f.k), pC, 18)));
+    }
+    if (S.com.length) for (const f of fatias(ALVO, S.com)) {
+      const pcCom = new PivotCache(f.nome, heads, f.recs, bval, { blankEmpty: true });
+      const p = pivotSheet(pcCom, { name: nomeT(), top: true, rows: [ncmPos], data: dat3, numFmt: 165, sortAsc: true, sortBy: 1 });
+      B.addSheet(comAviso({ ...pivTab(parteNome('DIN NCM COM PC - ORDEM CRESCENT', f.k), p, 18), colStyles: null }, f, ALVO, S.com.length));
+    }
     B.addSheet(dataSheet(ALVO, S.com, LY.totSheets.includes('com')));
     B.addSheet(dataSheet(OUTRA, S.sem, LY.totSheets.includes('sem')));
-    if (S.sem.length) { const p = pivotSheet(pcSem, { name: nomeT(), top: true, rows: [ncmPos], data: dat3, numFmt: 165 }); B.addSheet(pivTab('DIN NCM SEM PC', p, 18)); }
+    if (S.sem.length) for (const f of fatias(OUTRA, S.sem)) {
+      const pcSem = new PivotCache(f.nome, heads, f.recs, bval, { blankEmpty: true });
+      const p = pivotSheet(pcSem, { name: nomeT(), top: true, rows: [ncmPos], data: dat3, numFmt: 165 });
+      B.addSheet(comAviso(pivTab(parteNome('DIN NCM SEM PC', f.k), p, 18), f, OUTRA, S.sem.length));
+    }
   } else {
     // 037: como no vídeo 2 (DINAMICA POR REG, DINAM POR BC PC, NOTAS COM PC, DINAMICA POR NCM sobre a NOTAS SEM PC classificada)
-    const pReg = pivotSheet(pcBase, { name: 'DinamicaPorReg', rows: fA >= 0 ? [fA, fReg] : [fReg], data: [{ fi: fPis, name: 'Soma de Vlr PIS' }, { fi: fCof, name: 'Soma de Vlr Cofins' }] });
-    const pMes = pivotSheet(pcBase, { name: 'DinamicaPorBC', rows: fA >= 0 && fM >= 0 ? [fA, fM] : [fM >= 0 ? fM : fReg], data: dat3, order: { [fM]: pvCmpMes } });
+    for (const f of fatias(BASE, S.recs)) {
+      const pcBase = new PivotCache(f.nome, heads, f.recs, bval, { blankEmpty: true }), av = sh => comAviso(sh, f, BASE, S.recs.length);
+      const pReg = pivotSheet(pcBase, { name: 'DinamicaPorReg', rows: fA >= 0 ? [fA, fReg] : [fReg], data: [{ fi: fPis, name: 'Soma de Vlr PIS' }, { fi: fCof, name: 'Soma de Vlr Cofins' }] });
+      const pMes = pivotSheet(pcBase, { name: 'DinamicaPorBC', rows: fA >= 0 && fM >= 0 ? [fA, fM] : [fM >= 0 ? fM : fReg], data: dat3, order: { [fM]: pvCmpMes } });
+      B.addSheet(av({ name: parteNome('DINAMICA POR REG', f.k), grid: false, cols: [58, 20, 20], rows: pReg.rows, pivot: pReg.pivot }));
+      B.addSheet(av({ name: parteNome('DINAM POR BC PC', f.k), grid: false, cols: [20, 30, 20, 20], rows: pMes.rows, pivot: pMes.pivot }));
+    }
     const nSem = semCols.length;
     const alvoVal = (rec, fi) => {
       if (fi < nSem) { const col = semCols[fi]; return col.type === 'cls' ? clsOf(rec) : valOf(rec, col); }
       const k = fi - nSem; if (k < 5) return null;
       const c = creditOf(rec); return c ? [c.base, c.pis, c.cof][k - 5] : 0;
     };
-    const cAlvo = new PivotCache(ALVO, semCols.map(c => c.h).concat(extra), alvo, alvoVal, { blankEmpty: true });
     const fItemA = semCols.findIndex(c => c.i === S.map.vlrItem);
-    const pNcm = aN ? pivotSheet(cAlvo, { name: 'DinamicaPorNCM', rows: [ncmPos], sortAsc: true, data: [{ fi: fItemA, name: 'Soma de Vlr Item' }] }) : null;
-    B.addSheet({ name: 'DINAMICA POR REG', grid: false, cols: [58, 20, 20], rows: pReg.rows, pivot: pReg.pivot });
-    B.addSheet({ name: 'DINAM POR BC PC', grid: false, cols: [20, 30, 20, 20], rows: pMes.rows, pivot: pMes.pivot });
     B.addSheet(dataSheet(OUTRA, S.com, LY.totSheets.includes('com')));
-    if (pNcm) B.addSheet({ name: 'DINAMICA POR NCM', grid: false, cols: [20, 20], rows: pNcm.rows, pivot: pNcm.pivot });
+    if (aN) for (const f of fatias(ALVO, alvo)) {
+      const cAlvo = new PivotCache(f.nome, semCols.map(c => c.h).concat(extra), f.recs, alvoVal, { blankEmpty: true });
+      const pNcm = pivotSheet(cAlvo, { name: 'DinamicaPorNCM', rows: [ncmPos], sortAsc: true, data: [{ fi: fItemA, name: 'Soma de Vlr Item' }] });
+      B.addSheet(comAviso({ name: parteNome('DINAMICA POR NCM', f.k), grid: false, cols: [20, 20], rows: pNcm.rows, pivot: pNcm.pivot }, f, ALVO, aN));
+    }
     B.addSheet(alvoSheet);
   }
 
@@ -2778,7 +2807,7 @@ async function buildWorkbook(onProgress) {
     rows: async (emit) => {
       emit([null, { v: 'Revisão PIS/COFINS (' + MODE.nome.toLowerCase() + ') — ' + (S.empresa.nome || 'Empresa'), s: XS.title }], { ht: 26 });
       emit([null, { v: 'CNPJ ' + fmtCNPJ(S.empresa.cnpj) + ' · período ' + per + ' · gerado pelo Revisor Fiscal em ' + new Date().toLocaleString('pt-BR'), s: XS.note }]);
-      emit([null, { v: 'Fonte: ' + S.files.join(', '), s: XS.note }]);
+      emit([null, { v: 'Fonte: ' + S.files.join(', ') + (abasDivididas().length ? ' · ATENÇÃO: ' + avisoDivisao() : ''), s: XS.note }]);
       emit([]);
       emit([null, 'Indicador', 'Valor'], { s: [0, XS.headG, XS.headG] });
       emit([null, 'Linhas processadas', { v: S.totals.n, s: XS.int }]);
@@ -3990,7 +4019,7 @@ function refreshClsHeader() { const y = window.scrollY; render(); window.scrollT
 async function gerarXlsx(t, onProg) {
   const atual = S.tipo, troca = t !== atual;
   if (troca) ativarAnalise(t);
-  try { return { nome: arquivoXlsx(t), blob: await buildWorkbook(onProg) }; }
+  try { const r = { nome: arquivoXlsx(t), blob: await buildWorkbook(onProg) }; if (abasDivididas().length) toast('Atenção: ' + avisoDivisao(), 9000); return r; }
   finally { if (troca) ativarAnalise(atual); }
 }
 async function gerarWord(t) {
