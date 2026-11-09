@@ -58,7 +58,7 @@ function renderChrome() {
 
 function go(view) {
   // sem planilha importada, as outras etapas abrem com a demonstração (dados fictícios), para dar para conhecer todas as telas
-  if (!S.loaded && view !== 'importar') {
+  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf))) {
     S.ui.aposImport = view;
     if (!busy) { toast('Nenhuma planilha importada: abrindo a demonstração com dados fictícios.', 3500); process({ demo: 'AMBAS' }); }
     return;
@@ -71,9 +71,10 @@ function go(view) {
 function render() {
   renderChrome();
   const v = S.ui.view, el = $('#view');
-  el.innerHTML = v === 'importar' ? viewImportar() : v === 'classificar' ? viewClassificar() : v === 'checklist' ? viewChecklist() : v === 'exportar' ? viewExportar() : viewPainel();
+  el.innerHTML = v === 'importar' ? viewImportar() : v === 'classificar' ? viewClassificar() : v === 'checklist' ? viewChecklist() : v === 'exportar' ? viewExportar() : v === 'outras' ? viewOutras() : viewPainel();
   if (v === 'painel') bindChart();
   if (v === 'importar') bindDrop();
+  if (v === 'outras') bindOutras();
 }
 
 /* ---------- 1. importar ---------- */
@@ -108,7 +109,7 @@ function viewImportar() {
   const st = {}; (S.timings || []).forEach(t => { st[t.id] = { state: 'ok', ms: t.ms, detail: t.detail }; });
   const atuais = tiposCarregados().map(t => ({ tipo: t, files: anaDe(t).files }));
   return '<div class="phead"><div><span class="band">Etapa 1 · Importar</span><h1>Solte as planilhas exportadas do <em>SistemaMA</em></h1>' +
-    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa.</p></div></div>' +
+    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa. Pode juntar também a <b>Junção 513</b> e a <b>ECF 0000/0010</b>.</p></div></div>' +
     '<div class="grid2"><div class="drop" id="drop">' + ICON.file + '<h2>Arraste a 037 e a 047 para cá</h2><p class="muted small">Os arquivos são lidos neste computador, aos pedaços: planilhas de 80 mil linhas carregam sem travar. Nada é enviado para servidores.</p>' +
     '<div class="toolbar" style="justify-content:center"><button class="btn primary big" data-act="pick" type="button">Escolher arquivos</button></div>' +
     '<div class="files-in static" id="drop-files">' + (S.demo ? '' : atuais.flatMap(a => a.files.map(n => fileChip({ name: n }, 0, a.tipo))).join('')) + '</div>' +
@@ -130,7 +131,7 @@ function showFiles(files) {
 function marcarArquivo(k, tipo) {
   const c = document.querySelector('#drop-files [data-fk="' + k + '"]'); if (!c) return;
   const stEl = c.querySelector('.fc-st'); if (stEl) stEl.textContent = 'reconhecida';
-  if (!c.querySelector('.fc-tag')) stEl.insertAdjacentHTML('afterend', '<span class="fc-tag">' + MODES[tipo].planilha + ' · ' + MODES[tipo].nome + '</span>');
+  if (!c.querySelector('.fc-tag')) stEl.insertAdjacentHTML('afterend', '<span class="fc-tag">' + (MODES[tipo] ? MODES[tipo].planilha + ' · ' + MODES[tipo].nome : EXTRA_NOME[tipo]) + '</span>');
 }
 function bindDrop() {
   const d = $('#drop'); if (!d) return;
@@ -143,11 +144,13 @@ function showImportError(msg) { const e = $('#imp-err'); if (e) e.innerHTML = '<
 /* Vários arquivos de uma vez: cada um é lido, reconhecido pelo cabeçalho (037 ou 047) e entra na sua análise.
    Arquivos da mesma planilha (a 037 dividida por ano, por exemplo) são unidos. */
 async function lerArquivos(files, onStep, onFile) {
-  const t0 = now(), grupos = new Map(); let nLin = 0;
+  const t0 = now(), grupos = new Map(), extras = []; let nLin = 0;
   for (let k = 0; k < files.length; k++) {
     const f = files[k], pre = files.length > 1 ? 'Arquivo ' + (k + 1) + ' de ' + files.length + ' · ' : '';
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
     const wb = await readWorkbook(f, d => onStep({ id: 'ler', state: 'run', detail: pre + d }));
+    const tx = tipoExtra(wb.headers.map(normKey));
+    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
     if (M.missing.length) throw new Error('"' + f.name + '": não encontrei as colunas ' + M.missing.map(x => FIELDS[x].names[0].toUpperCase()).join(', ') + '. Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo.');
     const tipo = detectTipo(M.hk, wb.rows, M.map), sig = M.hk.join('|');
@@ -167,7 +170,11 @@ async function lerArquivos(files, onStep, onFile) {
   const lst = ['ENT', 'SAI'].filter(t => grupos.has(t)).map(t => grupos.get(t));
   if (lst.length > 1 && lst[0].cnpj && lst[1].cnpj && lst[0].cnpj !== lst[1].cnpj) throw new Error('A 037 ("' + lst[0].fileNames[0] + '", CNPJ ' + fmtCNPJ(lst[0].cnpj) + ') e a 047 ("' + lst[1].fileNames[0] + '", CNPJ ' + fmtCNPJ(lst[1].cnpj) + ') são de empresas diferentes. Importe as planilhas de uma empresa por vez.');
   const ms = now() - t0;
-  return lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
+  const out = lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
+  const c0 = lst.map(g => g.cnpj).find(Boolean) || (S.loaded ? digits(S.empresa.cnpj) : '');
+  for (const x of extras) if (c0 && x.dados.cnpj && x.dados.cnpj !== c0) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ', e as planilhas da análise são do CNPJ ' + fmtCNPJ(c0) + '. Importe as planilhas de uma empresa por vez.');
+  out.extras = extras;
+  return out;
 }
 
 /* depois de cada planilha: junta com a outra análise da mesma empresa (outra empresa sai da tela), recupera o nome e o logotipo */
@@ -213,12 +220,12 @@ async function process(input) {
   else if (input.demo) showFiles((input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).map(t => ({ name: MODES[t].titulo + '.xlsx' })));
   paint(); total('processando…');
   const errEl = $('#imp-err'); if (errEl) errEl.innerHTML = '';
-  const feitas = [];
+  const feitas = []; let extrasLidas = [];
   try {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else jobs = (await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo)).map(pre => ({ pre, sample: input.sample }));
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
     for (let k = 0; k < jobs.length; k++) {
       const j = jobs[k], md = MODES[j.demo || j.pre.tipo], pref = jobs.length > 1 ? (k + 1) + ' de ' + jobs.length + ' · ' : '';
@@ -233,7 +240,15 @@ async function process(input) {
       if (k < jobs.length - 1) await sleep(500);
     }
     if (feitas.length > 1 && S.tipo !== feitas[0]) ativarAnalise(feitas[0]);
+    for (const x of extrasLidas) guardarExtra(x.tipo, x.dados);
+    // se a 037 chegou depois da 513, refaz a sugestão da 513 com os fornecedores da 037
+    if (feitas.includes('ENT') && S.extras.j513 && !extrasLidas.some(x => x.tipo === 'J513')) analisarJ513(S.extras.j513);
     busy = false;
+    if (!jobs.length && extrasLidas.length) {
+      total('concluído'); renderChrome();
+      toast(extrasLidas.map(x => EXTRA_NOME[x.tipo]).join(' e ') + ': ' + (extrasLidas.length > 1 ? 'reconhecidas' : 'reconhecida') + '.' + (!S.loaded && extrasLidas.some(x => x.tipo === 'J513') ? ' Importe também a 037 para o Revisor sugerir a classificação das notas pelo fornecedor.' : ''), 5000);
+      await sleep(650); go('outras'); return;
+    }
     toast(feitas.length > 1 ? 'Planilhas ' + feitas.map(t => MODES[t].planilha).join(' e ') + ' processadas. Alterne entre elas no topo da tela.'
       : 'Planilha ' + MODE.planilha + ' (' + MODE.nome.toLowerCase() + '): ' + fNum(S.totals.n) + ' linhas processadas em ' + fMs(S.procMs), 4200);
     await sleep(650);
@@ -452,15 +467,18 @@ function viewExportar() {
   const linhaAn = t => { const a = anaDe(t); return '<li class="rd ok"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + '</b><div class="small muted">' + fNum(a.totals.n) + ' linhas · ' + ymLabel(a.months[0].ym) + ' a ' + ymLabel(a.months[a.months.length - 1].ym) + ' · ' + esc(a.files.join(', ')) + '</div></div><span></span></li>'; };
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
-  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
+  const X5 = extrasDaEmpresa();
+  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
   // abas na ordem do arquivo: as da analista primeiro, as do Revisor no fim
   const tabs = t => t === 'SAI' ? [MODES[t].base, 'REGISTRO', 'MODELO', 'CFOP', 'DIN NCM COM PC - ORDEM CRESCENT', 'NOTAS COM PC', 'NOTAS SEM PC', 'DIN NCM SEM PC', 'RESUMO', 'ITENS A RECUPERAR', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST']
     : [MODES[t].base, 'DINAMICA POR REG', 'DINAM POR BC PC', 'NOTAS COM PC', 'DINAMICA POR NCM', 'NOTAS SEM PC', 'RESUMO', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST'];
   const tabsTxt = t => t === 'SAI' ? 'As mesmas abas e dinâmicas do Excel da analista, com a mesma formatação. No fim, as abas do Revisor com a classificação e o valor a recuperar.'
     : 'As abas que a equipe monta hoje, com tabelas dinâmicas de verdade, filtros, totais e a coluna CLASSIF.';
-  return '<div class="phead"><div><span class="band">Etapa 5 · Exportar</span><h1><em>Excel</em> e <em>Word</em> desta empresa</h1><p>Os arquivos saem com a classificação atual. Se algo mudar depois, aqui ou no Excel, basta gerar de novo.</p></div></div>' +
+  return '<div class="phead"><div><span class="band">Etapa 6 · Exportar</span><h1><em>Excel</em> e <em>Word</em> desta empresa</h1><p>Os arquivos saem com a classificação atual. Se algo mudar depois, aqui ou no Excel, basta gerar de novo.</p></div></div>' +
     '<section class="card"><div class="card-h"><h2>Tudo pronto para baixar?</h2><span class="sub">' + esc(fmtCNPJ(S.empresa.cnpj)) + '</span></div><div class="card-b"><ul class="ready">' +
     tl.map(linhaAn).join('') + falta.map(linhaFalta).join('') +
+    (X5.j513 ? '<li class="rd ok"><span class="rd-i"></span><div><b>Junção 513 · notas fora do EFD-Contribuições</b><div class="small muted">' + fNum(X5.j513.res.cand.E) + ' entradas · crédito ' + fBRL(X5.j513.res.pis + X5.j513.res.cof) + (X5.j513.res.ava.E + X5.j513.res.ava.S ? ' · ' + (X5.j513.res.ava.E + X5.j513.res.ava.S) + ' notas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
+    (X5.ecf ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECF 0000/0010</b><div class="small muted">Regime de apuração: ' + esc(textoApuracao(X5.ecf)) + '</div></div><span></span></li>' : '') +
     '<li class="rd ' + (nomeOk ? 'ok' : 'warn') + '" id="rd-nome"><span class="rd-i"></span><div class="field"><label for="f-nome">Nome da empresa (capa, carta e nome dos arquivos)</label><input type="text" id="f-nome" value="' + esc(S.empresa.nome) + '" placeholder="Razão social, como deve sair no relatório" autocomplete="off"></div><span></span></li>' +
     (md ? '<li class="rd ok"><span class="rd-i"></span><div><b>Modelo do diagnóstico: ' + esc(md.nome) + '</b><div class="small muted">Modelo próprio, carregado em ' + fData(md.data) + (md.empresaModelo ? ' · empresa do modelo: ' + esc(md.empresaModelo) : '') + '. Fica salvo só neste navegador.</div></div><div class="toolbar"><button class="btn" data-act="modelo" type="button">Trocar</button>' + (temPadrao ? '<button class="btn" data-act="modelo-del" type="button">Usar o padrão da Milk</button>' : '<button class="btn" data-act="modelo-del" type="button">Remover</button>') + '</div></li>'
       : temPadrao ? '<li class="rd ok"><span class="rd-i"></span><div><b>Modelo do diagnóstico: padrão da Milk</b><div class="small muted">O diagnóstico de sempre da Milk, com os dados desta empresa. O que depende de outras fontes (gráficos do SistemaMA, ECD) fica em amarelo para completar.</div></div><button class="btn" data-act="modelo" type="button">Usar outro modelo</button></li>'
@@ -497,7 +515,7 @@ function bindEvents() {
   $('#btn-perfil').addEventListener('click', openPerfil);
   $('#btn-perfil-top').addEventListener('click', openPerfil);
   bindPerfil();
-  window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h && h !== S.ui.view && ['importar', 'painel', 'classificar', 'checklist', 'exportar'].includes(h)) go(h); });
+  window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (h && h !== S.ui.view && ['importar', 'painel', 'classificar', 'checklist', 'outras', 'exportar'].includes(h)) go(h); });
   window.addEventListener('resize', () => { const h = $('#top').getBoundingClientRect().height; document.documentElement.style.setProperty('--toph', Math.round(h) + 'px'); });
 
   const view = $('#view');
@@ -622,6 +640,11 @@ async function doTudo(btn) {
       const f = await gerarXlsx(t, (sheet, p) => { btn.textContent = 'Excel ' + MODES[t].planilha + ': ' + sheet.toLowerCase() + (p ? ' ' + p + '%' : '') + '…'; });
       btn.textContent = 'Salvando Excel ' + MODES[t].planilha + '…';
       if (await saveFile(f.nome, f.blob, { retry: true })) n++;
+      await sleep(400);
+    }
+    if (extrasDaEmpresa().j513) {
+      btn.textContent = 'Excel da Junção 513…'; await tick();
+      if (await saveFile(arquivoJ513(), await buildWorkbookJ513(), { retry: true })) n++;
       await sleep(400);
     }
     btn.textContent = 'Gerando o Word…'; await tick();

@@ -15,7 +15,7 @@ function saveSettings() { store.set(SET_KEY, S.settings); }
 function saveKB() { store.set(KB_KEY, S.kb); }
 
 /* --- leitura do Excel: .xlsx em fluxo (rápido e com pouca memória); SheetJS para .xls/.csv ou se o fluxo falhar --- */
-const NAO_ACHEI = f => 'Não encontrei as colunas da exportação do SistemaMA (CFOP, Vlr PIS…) em "' + f.name + '". Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo.';
+const NAO_ACHEI = f => 'Não encontrei as colunas da exportação do SistemaMA (CFOP, Vlr PIS…) em "' + f.name + '". Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo, a Junção 513 (EFD ICMS/IPI + EFD-Contribuições) ou a ECF 0000/0010.';
 async function readWorkbook(file, prog) {
   if (/\.xls[xm]$/i.test(file.name || '') || !file.name) {
     try {
@@ -38,7 +38,7 @@ async function readWorkbook(file, prog) {
     let hr = -1;
     for (let i = 0; i < Math.min(10, aoa.length); i++) {
       const ks = (aoa[i] || []).map(normKey);
-      if (ks.includes('cfop') && ks.some(k => k === 'vlr pis')) { hr = i; break; }
+      if (cabecalhoConhecido(ks)) { hr = i; break; }
     }
     if (hr >= 0 && (!best || aoa.length > best.aoa.length)) best = { name, aoa, hr };
   }

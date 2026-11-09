@@ -151,6 +151,8 @@ const XR = {
 };
 
 /* Lê a planilha da exportação. Devolve { headers, rows, sheet }. */
+/* cabeçalho de planilha conhecida: 037/047 (CFOP e Vlr PIS) ou complementar (Junção 513, ECF) */
+const cabecalhoConhecido = ks => (ks.includes('cfop') && ks.includes('vlr pis')) || !!tipoExtra(ks);
 async function readXlsxStream(file, onProgress) {
   const dir = await XR.dir(file);
   const get = p => dir.get(p.replace(/^\/+/, '').toLowerCase());
@@ -172,14 +174,26 @@ async function readXlsxStream(file, onProgress) {
   const sstEnt = get('xl/sharedStrings.xml');
   const sst = sstEnt ? await XR.sharedStrings(file, sstEnt) : [];
   // procura a aba com o cabeçalho da exportação (CFOP e Vlr PIS) nas 12 primeiras linhas
-  const findHeader = rows => { for (let i = 0; i < rows.length; i++) { const ks = (rows[i] || []).map(normKey); if (ks.includes('cfop') && ks.includes('vlr pis')) return i; } return -1; };
-  let best = null;
+  const findHeader = rows => { for (let i = 0; i < rows.length; i++) { const ks = (rows[i] || []).map(normKey); if (cabecalhoConhecido(ks)) return i; } return -1; };
+  let best = null; const achadas = [];
   for (const sh of sheets) {
     const head = await XR.rows(file, sh.ent, sst, { maxRows: 12 });
     const hr = findHeader(head);
-    if (hr >= 0 && (!best || sh.ent.usize > best.ent.usize)) best = Object.assign({ hr }, sh);
+    if (hr >= 0) achadas.push(Object.assign({ hr, cab: head[hr].map(normKey) }, sh));
+    if (hr >= 0 && (!best || sh.ent.usize > best.ent.usize)) best = Object.assign({ hr, cab: head[hr].map(normKey) }, sh);
   }
   if (!best) return null;
+  // Junção 513 já trabalhada: a analista separa ENTRADAS e SAÍDAS em abas; junta as abas com o mesmo cabeçalho
+  const mesmas = tipoExtra(best.cab) === 'J513' ? achadas.filter(a => a.cab.filter(Boolean).join('|').startsWith(best.cab.filter(Boolean).join('|').slice(0, 200))) : [best];
+  if (mesmas.length > 1) {
+    const rows = []; let headers = null;
+    for (const a of mesmas) {
+      const all = await XR.rows(file, a.ent, sst, { onProgress, onRows: null });
+      if (!headers) headers = (all[a.hr] || []).map(h => h == null ? '' : String(h).trim());
+      for (let i = a.hr + 1; i < all.length; i++) { const r = all[i]; if (r && r.some(v => v != null && v !== '')) rows.push(r); }
+    }
+    return { headers, rows, sheet: mesmas.map(a => a.name).join(' + ') };
+  }
   const all = await XR.rows(file, best.ent, sst, { onProgress, onRows: null });
   const headers = (all[best.hr] || []).map(h => h == null ? '' : String(h).trim());
   const rows = [];

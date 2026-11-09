@@ -136,7 +136,10 @@ async function preencherModelo(bytes, d) {
   const linhaI = icm ? { t: 'Exclusão do ICMS da BC Pis/Cofins', base: icm.base, pis: icm.pis, cof: icm.cof } : null;
   const linhaZ = R.SAI && (R.SAI.aliqZero.pis + R.SAI.aliqZero.cof) > 0 ? { t: 'PIS e COFINS PAGOS ALIQUOTA 0', ...R.SAI.aliqZero } : null;
   const linhaO = R.SAI && (R.SAI.outrasReceitas.pis + R.SAI.outrasReceitas.cof) > 0 ? { t: 'PIS e COFINS sobre receitas não tributáveis', ...R.SAI.outrasReceitas } : null;
-  const linhas = [linhaE, linhaI, linhaZ, linhaO].filter(Boolean);
+  // como no RESUMO da analista: notas sem crédito (037), notas não escrituradas (513), créditos da ECD, exclusão do ICMS (047)
+  const linhaN = d.j513 && (d.j513.pis + d.j513.cof) > 0 ? { t: 'Notas não escrituradas no SPED Contribuições', ...d.j513 } : null;
+  const linhaD = d.ecd ? { t: 'Créditos - ECD', ...d.ecd } : null;
+  const linhas = [linhaE, linhaN, linhaD, linhaI, linhaZ, linhaO].filter(Boolean);
   const totalGeral = r2(linhas.reduce((a, l) => a + l.pis + l.cof, 0));
 
   const temRegime = !!(R.ENT || R.SAI);
@@ -152,7 +155,8 @@ async function preencherModelo(bytes, d) {
     if ((q = DX.replaceRe(p, /no per[ií]odo de [a-zç]+ de \d{4} a [a-zç]+ de \d{4}/i, () => 'no período de ' + ymLong(regs.ini) + ' a ' + ymLong(regs.fim)))) { p = q; relat.feitos.push('Período da carta'); ok = true; }
     // dados da empresa
     if (Object.keys(anosReg).length && (q = DX.replaceRe(p, /(FORMA DE TRIBUTA[ÇC][ÃA]O ATUAL:\s*)(.+)$/i, m => m[1] + formaTributacao(anosReg)))) { p = q; relat.feitos.push('Forma de tributação'); ok = true; }
-    if (/^\s*REGIME DE APURA[ÇC][ÃA]O:/i.test(DX.text(p))) relat.pendentes.push('Regime de apuração do IRPJ/CSLL (trimestral ou anual): vem da ECF, conferir a linha "' + DX.text(p).trim() + '"');
+    if (d.ecf && d.ecf.apur && (q = DX.replaceRe(p, /^(\s*REGIME DE APURA[ÇC][ÃA]O:\s*)(.*)$/i, m => m[1] + d.ecf.apur.toUpperCase()))) { p = q; relat.feitos.push('Regime de apuração do IRPJ/CSLL (ECF)'); ok = true; }
+    else if (/^\s*REGIME DE APURA[ÇC][ÃA]O:/i.test(DX.text(p))) relat.pendentes.push('Regime de apuração do IRPJ/CSLL (trimestral ou anual): vem da ECF, conferir a linha "' + DX.text(p).trim() + '"');
     if (regAtualTxt && (q = DX.replaceRe(p, /atualmente tributada pelo (LUCRO REAL|LUCRO PRESUMIDO|SIMPLES NACIONAL)/i, () => 'atualmente tributada pelo ' + regAtualTxt))) { p = q; if (/^\s*Destacamos que a empresa .{0,160}poder[áa] aproveitar/i.test(DX.text(p))) ok = true; }
     // regimes por ano: sem ano no Presumido, o parágrafo do Presumido sai; sem ano no Real, sai o do Real
     if (temRegime && /^Em \d{4}(?:(?:, \d{4})* e \d{4})? optou pelo Lucro Presumido/i.test(DX.text(p))) {
@@ -224,8 +228,9 @@ async function preencherModelo(bytes, d) {
       const rows = linhas.map(l => [l.t, fBRL(l.base), fBRL(l.pis), fBRL(l.cof), fBRL(l.pis + l.cof)]);
       rows.push(['', fBRL(linhas.reduce((a, l) => a + l.base, 0)), fBRL(linhas.reduce((a, l) => a + l.pis, 0)), fBRL(linhas.reduce((a, l) => a + l.cof, 0)), fBRL(totalGeral)]);
       p = dxTabela([{ h: '', w: 3300 }, { h: 'Base de Cálculo Total', w: 1700, right: true }, { h: 'PIS (1,65%)', w: 1300, right: true }, { h: 'COFINS (7,60%)', w: 1400, right: true }, { h: 'TOTAL', w: 1400, right: true }], rows, { totalLast: true }) +
-        '<w:p>' + DX.pPr(p) + DX.hlRun('Acrescentar ao quadro os créditos levantados na ECD (energia elétrica, fretes, depreciação), se houver.', DX.rPr(p)) + '</w:p>';
-      relat.feitos.push('Quadro-resumo dos valores'); relat.pendentes.push('Créditos da ECD no quadro-resumo (energia, fretes, depreciação)');
+        (linhaD ? '' : '<w:p>' + DX.pPr(p) + DX.hlRun('Acrescentar ao quadro os créditos levantados na ECD (energia elétrica, fretes, depreciação), se houver.', DX.rPr(p)) + '</w:p>');
+      relat.feitos.push('Quadro-resumo dos valores' + (linhaN ? ' (com as notas não escrituradas da Junção 513)' : '') + (linhaD ? ' (com os créditos da ECD)' : ''));
+      if (!linhaD) relat.pendentes.push('Créditos da ECD no quadro-resumo (energia, fretes, depreciação)');
     }
     else if (i === capaLogo) {
       if (d.logoCliente) {
@@ -289,5 +294,7 @@ const modeloBytes = () => (S.modelo && S.modelo.bytes) || modeloPadrao();
 
 /* dados das análises abertas para o modelo */
 function dadosModelo() {
-  return { nome: S.empresa.nome, cnpj: S.empresa.cnpj, cidade: S.settings.cidade, ent: resumoDe('ENT'), sai: resumoDe('SAI'), logoCliente: S.logoCliente || null };
+  const X = extrasDaEmpresa(), Q = quadroResumo();
+  return { nome: S.empresa.nome, cnpj: S.empresa.cnpj, cidade: S.settings.cidade, ent: resumoDe('ENT'), sai: resumoDe('SAI'), logoCliente: S.logoCliente || null,
+    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
 }

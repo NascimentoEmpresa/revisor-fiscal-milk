@@ -5,3 +5,5 @@ app/dist/
 app/test/carga/*.xlsx
 app/test/carga/pagina.html
 *.log
+app/test/shots*/
+app/test/page*.html
