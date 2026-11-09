@@ -29,3 +29,6 @@ CREATE TABLE IF NOT EXISTS auditoria (
   ip       TEXT,
   em       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 11/2026: foto do perfil na conta (antes ficava no navegador e aparecia para quem entrasse depois no mesmo computador)
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS foto TEXT;

@@ -666,18 +666,21 @@ function applyLogo() {
 
 /* ---------- perfil de quem usa (fica salvo neste navegador) ---------- */
 const PERFIL_KEY = 'revisor-fiscal-perfil-v1', TEMA_KEY = 'revisor-fiscal-tema';
-S.perfil = Object.assign({ cargo: '', oab: '', email: '', tel: '', foto: null }, store.get(PERFIL_KEY, {}));
+// com servidor, o perfil vem da conta de quem entrou (nada do navegador, que pode ser de outro usuário)
+S.perfil = Object.assign({ cargo: '', oab: '', email: '', tel: '', foto: null }, window.RF_SERVIDOR ? {} : store.get(PERFIL_KEY, {}));
 S.ui.perfil = false;
-const savePerfil = () => { store.set(PERFIL_KEY, S.perfil); servidorPerfil(); };
-/* Versão com servidor: nome, cargo, OAB, e-mail, telefone, escritório e cidade ficam na conta do usuário (a foto e o tema, no navegador) */
+if (window.RF_SERVIDOR) S.settings.analista = ''; // o nome certo chega com a conta (evita mostrar as iniciais de quem usou antes)
+const savePerfil = () => { if (window.RF_SERVIDOR) servidorPerfil(); else store.set(PERFIL_KEY, S.perfil); };
+/* Versão com servidor: nome, cargo, OAB, e-mail, telefone, escritório, cidade e foto ficam na conta do usuário (o tema, no navegador) */
+let fotoNoServidor; // última foto salva na conta: a foto só é enviada quando muda
 let perfilTimer = null;
 function servidorPerfil() {
   if (!window.RF_SERVIDOR) return;
   clearTimeout(perfilTimer);
   perfilTimer = setTimeout(() => {
     fetch('/api/perfil', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nome: S.settings.analista, cargo: S.perfil.cargo, oab: S.perfil.oab, telefone: S.perfil.tel, escritorio: S.settings.escritorio, cidade: S.settings.cidade }) })
-      .then(r => { if (r.status === 401) location.href = '/login'; }).catch(() => {});
+      body: JSON.stringify(Object.assign({ nome: S.settings.analista, cargo: S.perfil.cargo, oab: S.perfil.oab, telefone: S.perfil.tel, escritorio: S.settings.escritorio, cidade: S.settings.cidade }, S.perfil.foto !== fotoNoServidor ? { foto: S.perfil.foto || null } : {})) })
+      .then(r => { if (r.status === 401) { location.href = '/login'; return; } if (r.ok) r.json().then(u => { fotoNoServidor = u.foto || null; }); else if (r.status === 400) toast('Não consegui salvar a foto. Tente outra imagem.'); }).catch(() => {});
   }, 700);
 }
 async function carregarContaServidor() {
@@ -689,7 +692,9 @@ async function carregarContaServidor() {
     if (u.nome) S.settings.analista = u.nome;
     if (u.escritorio) S.settings.escritorio = u.escritorio;
     if (u.cidade) S.settings.cidade = u.cidade;
-    Object.assign(S.perfil, { cargo: u.cargo || S.perfil.cargo, oab: u.oab || S.perfil.oab, email: u.email, tel: u.telefone || S.perfil.tel });
+    Object.assign(S.perfil, { cargo: u.cargo || '', oab: u.oab || '', email: u.email, tel: u.telefone || '', foto: u.foto || null });
+    fotoNoServidor = S.perfil.foto;
+    store.del(PERFIL_KEY); // limpa o perfil antigo guardado no navegador (de antes do login por conta)
     renderPerfilChip();
   } catch (e) { /* sem conexão: segue com o que está no navegador */ }
 }

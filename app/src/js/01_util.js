@@ -90,7 +90,8 @@ function toast(msg, ms = 2600) {
 }
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* armazenamento indisponível */ } }
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* armazenamento indisponível */ } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) { /* armazenamento indisponível */ } }
 };
 
 /* salvar arquivo: no claude.ai usa a capacidade "downloads"; fora dele, link de download comum */

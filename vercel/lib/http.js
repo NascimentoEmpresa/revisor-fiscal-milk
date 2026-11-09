@@ -5,7 +5,7 @@ export const json = (res, status, obj) => { res.statusCode = status; res.setHead
 export async function corpo(req) {
   if (req.body && typeof req.body === 'object') return req.body;
   if (typeof req.body === 'string') { try { return JSON.parse(req.body); } catch { return {}; } }
-  let s = ''; for await (const c of req) { s += c; if (s.length > 1e5) break; }
+  let s = ''; for await (const c of req) { s += c; if (s.length > 6e5) break; }
   try { return JSON.parse(s || '{}'); } catch { return {}; }
 }
 export const ipDe = req => String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim() || '?';
