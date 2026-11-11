@@ -958,6 +958,8 @@ const FIELDS = {
   part: { names: ['nome participante', 'participante'], req: false },
   cnpjPart: { names: ['cnpj participante'], req: false },
   cpfPart: { names: ['cpf participante'], req: false },
+  contaCtb: { names: ['conta contabil'], req: false },
+  nomeCtb: { names: ['nome contabil'], req: false },
   numDoc: { names: ['numero documento', 'numero do documento'], req: false },
   dataDoc: { names: ['data documento', 'data do documento'], req: false },
   chave: { names: ['chave nf e', 'chave nfe', 'chave'], req: false },
@@ -3485,15 +3487,16 @@ function dadosModelo() {
    A classificação das notas da 513 usa o que o MESMO fornecedor vende nas notas da 037 (NCM, descrição e a
    classificação do Revisor), porque a 513 não traz os itens da nota. */
 
-S.extras = { cnpj: '', j513: null, ecf: null, ecd: null };
+S.extras = { cnpj: '', j513: null, ecf: null, ecd: null, ecdA: null };
 
 /* reconhece a planilha complementar pelo cabeçalho (normalizado por normKey) */
 function tipoExtra(hk) {
   if (hk.includes('existe efd') && hk.includes('existe con') && hk.some(k => k.startsWith('vlr operacional'))) return 'J513';
   if (hk.includes('forma tributacao') && hk.includes('forma apuracao') && hk.includes('periodo inicial')) return 'ECF';
+  if (hk.includes('vlr partida') && hk.includes('d c') && hk.includes('tipo lancamento') && hk.includes('conta')) return 'ECD';
   return null;
 }
-const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação' };
+const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento' };
 
 /* ano-mês (aaaamm) de uma data em texto dd/mm/aaaa, Date ou número de série do Excel */
 function ymDe(v) {
@@ -3657,13 +3660,14 @@ const tribAtualECF = ecf => ecf && ecf.anos.length ? ecf.anos[ecf.anos.length - 
 /* ---------- guarda junto da empresa ---------- */
 function guardarExtra(tipo, dados) {
   const c = digits(dados.cnpj || '');
-  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
+  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecdA: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
   if (!S.extras.cnpj) S.extras.cnpj = c;
   if (tipo === 'J513') S.extras.j513 = analisarJ513(dados);
-  if (tipo === 'ECF') S.extras.ecf = dados;
+  if (tipo === 'ECF') { S.extras.ecf = dados; if (S.extras.ecdA) analisarECD(S.extras.ecdA); }
+  if (tipo === 'ECD') S.extras.ecdA = analisarECD(dados);
 }
 /* complementares só valem para a empresa que está na tela */
-const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null };
+const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null, ecdA: null };
 
 /* ---------- Excel da Junção 513 ---------- */
 async function buildWorkbookJ513(onProgress) {
@@ -3741,11 +3745,12 @@ const arquivoJ513 = () => 'Junção 513 - Notas não escrituradas - ' + nomeArq(
 function quadroResumo() {
   const X = extrasDaEmpresa(), E = resumoDe('ENT'), Sa = resumoDe('SAI'), j = X.j513 && X.j513.res;
   const icm = Sa && Sa.icms && Sa.icms.n && !Sa.icms.residual ? Sa.icms : null;
-  const ecd = X.ecd && X.ecd.base > 0 ? { base: r2(X.ecd.base), pis: r2(X.ecd.base * CRED_PIS), cof: r2(X.ecd.base * CRED_COF) } : null;
+  // ECD importada: calculada conta a conta; sem ela, a base que a analista informar
+  const ecd = X.ecdA ? { base: X.ecdA.res.base, pis: X.ecdA.res.pis, cof: X.ecdA.res.cof } : X.ecd && X.ecd.base > 0 ? { base: r2(X.ecd.base), pis: r2(X.ecd.base * CRED_PIS), cof: r2(X.ecd.base * CRED_COF) } : null;
   const L = [
     { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)', v: E ? E.pot : null, falta: 'importe a 037' },
     { k: 'j513', t: 'Notas não escrituradas no EFD-Contribuições (Junção 513)', v: j && (j.pis + j.cof) > 0 ? { base: j.base, pis: j.pis, cof: j.cof } : j ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a Junção 513' },
-    { k: 'ecd', t: 'Créditos da ECD', v: ecd, falta: 'informe a base abaixo' },
+    { k: 'ecd', t: 'Créditos da ECD (diferença ECD x 037)', v: ecd, falta: 'importe a ECD ou informe a base abaixo' },
     { k: 'icms', t: 'Exclusão do ICMS da base do PIS/COFINS (047)', v: icm ? { base: icm.base, pis: icm.pis, cof: icm.cof } : Sa ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a 047' }
   ];
   const tot = L.reduce((a, l) => { if (l.v) { a.base += l.v.base; a.pis += l.v.pis; a.cof += l.v.cof; } return a; }, { base: 0, pis: 0, cof: 0 });
@@ -3753,11 +3758,12 @@ function quadroResumo() {
 }
 
 function viewOutras() {
-  const X = extrasDaEmpresa(), j = X.j513, ecf = X.ecf;
+  const X = extrasDaEmpresa(), j = X.j513, ecf = X.ecf, ecdA = X.ecdA;
   let h = '<div class="phead"><div><span class="band">Etapa 5 · Outras planilhas</span><h1>Planilhas <em>complementares</em> do SistemaMA</h1>' +
-    '<p>A <b>Junção 513</b> (EFD ICMS/IPI + EFD-Contribuições, C100/C170) mostra as notas que estão no SPED ICMS e não no SPED Contribuições. A <b>ECF 0000/0010</b> traz a forma de tributação e de apuração de cada ano. As duas entram no Excel e no Word desta empresa.</p></div>' +
+    '<p>A <b>ECD</b> (I200/I250) mostra as despesas contabilizadas que podem dar crédito e não foram aproveitadas na 037. A <b>Junção 513</b> (EFD ICMS/IPI + EFD-Contribuições, C100/C170) mostra as notas que estão no SPED ICMS e não no SPED Contribuições. A <b>ECF 0000/0010</b> traz a forma de tributação e de apuração de cada ano. As duas entram no Excel e no Word desta empresa.</p></div>' +
     '<div class="toolbar"><button class="btn" data-act="pick" type="button">Importar planilhas</button></div></div>';
-  if (!j && !ecf) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
+  if (!j && !ecf && !ecdA) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
+  if (ecdA) h += cardECD(ecdA);
   if (j) h += cardJ513(j);
   if (ecf) h += cardECF(ecf);
   h += cardQuadro(X);
@@ -3784,7 +3790,7 @@ function cardJ513(j) {
   return '<section class="card"><div class="card-h"><h2>Junção 513 · notas fora do EFD-Contribuições</h2><span class="sub">' + esc(j.files.join(', ')) + '</span></div><div class="card-b">' +
     (!j.comPerfil ? '<div class="err-box" style="margin-bottom:12px">Sem a 037 desta empresa, o Revisor não sabe o que cada fornecedor vende e deixa as compras em AVALIAR. Importe a 037 para a sugestão por fornecedor.</div>' : '') +
     '<div class="kpis">' + kpi('Entradas só no EFD ICMS', fNum(R.cand.E), fNum(R.com) + ' com crédito · ' + fNum(R.ava.E) + ' para avaliar') +
-    kpi('Crédito PIS + COFINS', fBRL(R.pis + R.cof), 'base ' + fBRL(R.base) + ' × 9,25%') +
+    kpi('Crédito PIS + COFINS', fBRLc(R.pis + R.cof), fBRL(R.pis + R.cof) + ' = base ' + fBRL(R.base) + ' × 9,25%') +
     kpi('Saídas só no EFD ICMS', fNum(R.cand.S), fNum(R.ava.S) + ' vendas para avaliar' + (R.riscoBase ? ' · ' + fBRL(R.riscoBase) : '')) +
     kpi('Só no EFD-Contribuições', fNum(R.soCon), 'informativo') + '</div>' +
     '<div class="toolbar" style="margin:14px 0 8px;flex-wrap:wrap"><span class="msw" role="group" aria-label="Entradas ou saídas"><button type="button" data-jt="E" aria-pressed="' + (tipo === 'E') + '">Entradas</button><button type="button" data-jt="S" aria-pressed="' + (tipo === 'S') + '">Saídas</button></span>' +
@@ -3795,6 +3801,27 @@ function cardJ513(j) {
       : '<p class="muted small">Nenhuma nota neste filtro.</p>') +
     '<p class="small muted" style="margin-top:10px">Crédito de 1,65% + 7,6% sobre o valor da nota nas entradas COM CREDITO, só nos meses não cumulativos da 037. As sugestões vêm do que o mesmo fornecedor vende nas notas da 037. Uma decisão sua vale para esta nota.</p>' +
     '</div></section>';
+}
+
+function cardECD(e) {
+  const R = e.res, todas = S.ui.ecdTodas, ord = { [ECD_CLS.SIM]: 0, [ECD_CLS.AVA]: 1, [ECD_CLS.NAO]: 2 };
+  const lst = [...e.contas.values()].filter(c => c.despesa && c.valor && (todas || clsConta(c) !== ECD_CLS.NAO)).sort((a, b) => ord[clsConta(a)] - ord[clsConta(b)] || b.valor - a.valor);
+  const opts = [ECD_CLS.SIM, ECD_CLS.AVA, ECD_CLS.NAO], k = c => clsConta(c) === ECD_CLS.SIM ? 'COM' : clsConta(c) === ECD_CLS.AVA ? 'AVA' : 'SEM';
+  const linha = c => '<tr><td class="mono small">' + esc(c.conta) + '</td><td><div>' + esc(c.desc) + '</div><div class="small muted">' + esc(c.ov ? 'Decisão do analista' : c.cat) + (c.jaDe.length ? ' · já utilizado: ' + esc(c.jaDe.join(', ')) : '') + '</div></td>' +
+    '<td><select class="cls-select ' + k(c) + '" data-ecd="' + esc(c.conta) + '" aria-label="Incluir a conta ' + esc(c.desc) + '">' + opts.map(o => '<option' + (o === clsConta(c) ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></td>' +
+    '<td class="n">' + fBRL(c.valor) + '</td><td class="n">' + fBRL(c.ja) + '</td><td class="n"><b>' + fBRL(c.valor - c.ja) + '</b></td></tr>';
+  const contasOpt = [...e.contas.values()].filter(c => c.despesa && c.valor).sort((a, b) => a.desc.localeCompare(b.desc, 'pt-BR'));
+  const sem = e.semConta.length ? '<div style="margin-top:14px"><b class="small">Créditos da 037 em contas fora da tabela</b><p class="small muted">Não entram no já utilizado. Se correspondem a uma conta da ECD, escolha qual.</p><div class="tbl-wrap"><table><thead><tr><th>Conta na 037</th><th class="n">Base do PIS</th><th>Somar no já utilizado de</th></tr></thead><tbody>' +
+    e.semConta.map(s => '<tr><td>' + esc(s.conta.startsWith('#') ? s.nome : s.conta + (s.nome ? ' · ' + s.nome : '')) + '</td><td class="n">' + fBRL(s.base) + '</td><td><select data-ecd-atrib="' + esc(s.conta) + '"><option value="">— nenhuma —</option>' + contasOpt.map(c => '<option value="' + esc(c.conta) + '"' + (s.atrib === c.conta ? ' selected' : '') + '>' + esc(c.desc) + '</option>').join('') + '</select></td></tr>').join('') + '</tbody></table></div></div>' : '';
+  const anos = '<span class="seg" role="group" aria-label="Anos da análise">' + e.anos.map(a => '<button type="button" data-ecd-ano="' + a + '" aria-pressed="' + e.anosEscopo.includes(a) + '"' + (e.anosOff.has(a) || e.anosEscopo.includes(a) ? '' : ' disabled title="Fora do regime não cumulativo"') + '>' + a + '</button>').join('') + '</span>';
+  return '<section class="card"><div class="card-h"><h2>ECD · despesas x créditos da 037</h2><span class="sub">' + esc(e.files.join(', ')) + '</span></div><div class="card-b">' +
+    (!e.com037 ? '<div class="err-box" style="margin-bottom:12px">Sem a 037 desta empresa (com a coluna Conta Contábil), o "já utilizado" fica zerado. Importe a 037 para comparar.</div>' : '') +
+    '<div class="kpis">' + kpi('Contas incluídas', fNum(R.sim), fNum(R.ava) + ' para avaliar · ' + fNum(R.contas) + ' contas de despesa') + kpi('Valor na ECD', fBRLc(R.valor), fBRL(R.valor) + ' em débitos normais no período') +
+    kpi('Já utilizado (037)', fBRLc(R.ja), fBRL(R.ja) + ' de base do PIS com crédito') + kpi('Crédito PIS + COFINS', fBRLc(R.pis + R.cof), fBRL(R.pis + R.cof) + ' = diferença ' + fBRL(R.dif) + ' × 9,25%') + '</div>' +
+    '<div class="toolbar" style="margin:14px 0 8px;flex-wrap:wrap"><span class="small muted">Anos (regime não cumulativo' + (e.fonteRegime ? ', pela ' + e.fonteRegime : '') + '):</span>' + anos +
+    '<span class="seg"><button type="button" data-ecd-todas="0" aria-pressed="' + !todas + '">Incluir e avaliar</button><button type="button" data-ecd-todas="1" aria-pressed="' + !!todas + '">Todas as contas</button></span><span style="flex:1"></span><button class="btn" data-oact="ecd-xlsx" type="button">' + ICON.dl + 'Excel da ECD</button></div>' +
+    '<div class="tbl-wrap"><table><thead><tr><th>Conta</th><th>Descrição · categoria</th><th>Decisão</th><th class="n">ECD</th><th class="n">Já utilizado</th><th class="n">Diferença</th></tr></thead><tbody>' + lst.map(linha).join('') + '</tbody></table></div>' + sem +
+    '<p class="small muted" style="margin-top:10px">Contas sugeridas pelas hipóteses do art. 3º das Leis 10.637/2002 e 10.833/2003; as que dependem da atividade (essencial ou relevante) ficam em AVALIAR. A diferença negativa também entra no total, como no Excel da analista. Não constar como crédito no EFD-Contribuições não significa que o valor seja recuperável: confira o enquadramento.</p></div></section>';
 }
 function perfisNomes() {
   const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap), m = new Map();
@@ -3821,8 +3848,8 @@ function cardQuadro(X) {
   return '<section class="card"><div class="card-h"><h2>Quadro-resumo do crédito de PIS/COFINS</h2><span class="sub">vai para a conclusão do Word</span></div><div class="card-b">' +
     '<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th class="n">Base</th><th class="n">PIS (1,65%)</th><th class="n">COFINS (7,6%)</th><th class="n">Total</th></tr></thead><tbody>' + Q.L.map(lin).join('') +
     '<tr class="tot"><td><b>Total</b></td><td class="n">' + fBRL(Q.tot.base) + '</td><td class="n">' + fBRL(Q.tot.pis) + '</td><td class="n">' + fBRL(Q.tot.cof) + '</td><td class="n"><b>' + fBRL(Q.tot.pis + Q.tot.cof) + '</b></td></tr></tbody></table></div>' +
-    '<div class="field" style="max-width:420px;margin-top:14px"><label for="f-ecd">Base dos créditos da ECD (R$), apurada pela analista</label><input type="text" inputmode="decimal" id="f-ecd" value="' + (X.ecd && X.ecd.base ? NUM2.format(X.ecd.base) : '') + '" placeholder="Ex.: 1.258.309,62" autocomplete="off"></div>' +
-    '<p class="small muted">Enquanto o Revisor não lê a ECD (falta definir com a Milk a regra de escolha das contas), a base apurada pela analista entra aqui e vai para o quadro do Word.</p></div></section>';
+    (X.ecdA ? '' : '<div class="field" style="max-width:420px;margin-top:14px"><label for="f-ecd">Base dos créditos da ECD (R$), apurada pela analista</label><input type="text" inputmode="decimal" id="f-ecd" value="' + (X.ecd && X.ecd.base ? NUM2.format(X.ecd.base) : '') + '" placeholder="Ex.: 1.258.309,62" autocomplete="off"></div>' +
+    '<p class="small muted">Sem a ECD importada, a base apurada pela analista entra aqui e vai para o quadro do Word.</p>') + '</div></section>';
 }
 
 function bindOutras() {
@@ -3830,13 +3857,25 @@ function bindOutras() {
   v.onchange = e => {
     const s = e.target.closest('select[data-j]');
     if (s) { const j = S.extras.j513, n = j.notas.find(x => x.i === +s.dataset.j); if (!n) return; n.ov = s.value === n.sug.cls ? null : s.value; recalcJ513(j); refreshOutras(); toast('Nota ' + n.num + ': ' + s.value + '.'); return; }
+    const ec = e.target.closest('select[data-ecd]');
+    if (ec) { const c = S.extras.ecdA.contas.get(ec.dataset.ecd); c.ov = ec.value === c.sug ? null : ec.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
+    const at = e.target.closest('select[data-ecd-atrib]');
+    if (at) { S.extras.ecdA.atrib[at.dataset.ecdAtrib] = at.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     if (e.target.id === 'f-ecd') { const b = toNum(e.target.value) || 0; S.extras.ecd = { cnpj: S.extras.cnpj || digits(S.empresa.cnpj), base: b > 0 ? b : 0 }; refreshOutras(); }
   };
   v.onclick = async e => {
     const f = e.target.closest('[data-jf]'); if (f) { S.ui.jf = f.dataset.jf; S.ui.jn = 80; return refreshOutras(); }
     const t = e.target.closest('[data-jt]'); if (t) { S.ui.jt = t.dataset.jt; S.ui.jn = 80; return refreshOutras(); }
+    const ea = e.target.closest('[data-ecd-ano]'); if (ea) { const a = +ea.dataset.ecdAno, s = S.extras.ecdA.anosOff; if (s.has(a)) s.delete(a); else s.add(a); analisarECD(S.extras.ecdA); return refreshOutras(); }
+    const et = e.target.closest('[data-ecd-todas]'); if (et) { S.ui.ecdTodas = et.dataset.ecdTodas === '1'; return refreshOutras(); }
     const b = e.target.closest('[data-oact]'); if (!b) return;
     if (b.dataset.oact === 'j-mais') { S.ui.jn = (S.ui.jn || 80) + 200; return refreshOutras(); }
+    if (b.dataset.oact === 'ecd-xlsx') {
+      b.disabled = true; const lbl = b.innerHTML;
+      try { b.textContent = 'Gerando…'; await saveFile(arquivoECD(), await buildWorkbookECD()); }
+      catch (er) { console.error(er); toast('Não foi possível gerar o Excel: ' + er.message, 5000); }
+      b.disabled = false; b.innerHTML = lbl; return;
+    }
     if (b.dataset.oact === 'j513-xlsx') {
       b.disabled = true; const lbl = b.innerHTML;
       try { b.textContent = 'Gerando…'; const blob = await buildWorkbookJ513(); await saveFile(arquivoJ513(), blob); }
@@ -3846,6 +3885,195 @@ function bindOutras() {
   };
 }
 function refreshOutras() { if (S.ui.view !== 'outras') return; const y = window.scrollY; render(); window.scrollTo(0, y); }
+
+/* ======================= ECD (I200/I250 · Partidas de Lançamento) =======================
+   Regra da analista da Milk (áudio e mensagens de 10/11/2026, conferida no exemplo MAXXI):
+   1. Na ECD, as contas de despesa que podem dar crédito pelas hipóteses do art. 3º das Leis 10.637/2002 e
+      10.833/2003 (energia, aluguel, combustível, depreciação, fretes...) e o que for essencial e relevante à atividade.
+   2. Tabela por conta contábil com a soma dos lançamentos: débitos normais (sem o encerramento do exercício),
+      só nos meses em que a empresa estava no regime não cumulativo (Lucro Real).
+   3. "Já utilizado": na 037, a base de cálculo do PIS das notas COM crédito na mesma conta contábil; os bens do
+      ativo (F120/F130) vão para a conta de depreciação.
+   4. Diferença × 9,25% = crédito a recuperar, que a analista confere (enquadramento e documentos). */
+
+const ECD_CLS = { SIM: 'INCLUIR', AVA: 'AVALIAR', NAO: 'NÃO INCLUIR' };
+/* palavras da descrição da conta -> categoria. Ordem importa: a primeira que casar vale. */
+const ECD_REGRAS = [
+  // fora: folha, tributos, financeiras, penalidades, contas redutoras
+  { re: /^\(-\)|^\(\s*-\s*\)|devolu|estorno|redutor|\bdedu/, cat: 'Conta redutora ou devolução', cls: 'NAO' },
+  { re: /sal[aá]rio|ordenado|f[eé]rias|13[ºo°]|d[eé]cimo|inss|fgts|pr[oó][ -]?labore|indeniza|aviso pr[eé]vio|rescis|encargos sociais|provis[aã]o de f[eé]rias|provis[aã]o 13|gratifica|hora extra|comiss[oõ]es? s\/ vendas/, cat: 'Folha de pagamento e encargos', cls: 'NAO' },
+  { re: /\bicms\b|\bpis\b|cofins|\bipi\b|\biss\b|ipva|iptu|irpj|csll|imposto|tributo|taxas? diversas|contribui[cç][aã]o sindical/, cat: 'Tributos', cls: 'NAO' },
+  { re: /juros|iof|banc[aá]ri|financeir|cobran[cç]a|desconto|varia[cç][aã]o cambial|empr[eé]stimo|financiamento|aplica[cç]/, cat: 'Despesas e receitas financeiras', cls: 'NAO' },
+  { re: /multa|infra[cç]|perda|ganho|aliena[cç]|doa[cç]|brinde|patroc[ií]nio/, cat: 'Multas, perdas, alienações e liberalidades', cls: 'NAO' },
+  { re: /assist[eê]ncia m[eé]dica|plano de sa[uú]de|alimenta[cç]|refei[cç]|vale.?transporte|cesta|seguro de vida/, cat: 'Benefícios a empregados (crédito só em casos específicos)', cls: 'NAO' },
+  { re: /telefon|internet|comunica[cç]|correio|material de escrit|honor[aá]rios cont|advocat|consultoria|propaganda|publicidade|marketing|viagens?|hospedag|representa[cç]/, cat: 'Despesas administrativas e comerciais', cls: 'NAO' },
+  // hipóteses expressas do art. 3º
+  { re: /energia el[eé]tric|energia\b|luz e for[cç]a/, cat: 'Energia elétrica (art. 3º, III)', cls: 'SIM' },
+  { re: /alugu[eé]l|loca[cç][aã]o de (pr[eé]dio|im[oó]v|m[aá]quina|equip|ve[ií]cul)|arrendamento mercantil|leasing/, cat: 'Aluguéis e arrendamento (art. 3º, IV e V)', cls: 'SIM' },
+  { re: /deprecia|amortiza/, cat: 'Depreciação e amortização (art. 3º, VI e VII)', cls: 'SIM' },
+  { re: /combust[ií]v|lubrific|diesel|gasolina|[oó]leo/, cat: 'Combustíveis e lubrificantes (art. 3º, II)', cls: 'SIM' },
+  { re: /frete|carreto|armazenag|transporte de (carga|mercad)/, cat: 'Fretes e armazenagem (art. 3º, IX)', cls: 'SIM' },
+  { re: /manuten[cç]|conserva[cç]|pe[cç]as|pneu|repara[cç]|oficina/, cat: 'Manutenção, peças e pneus (insumo)', cls: 'SIM' },
+  // dependem da atividade: essencial ou relevante (STJ, REsp 1.221.170)
+  { re: /material de uso|uso e consumo|material de consumo|insumo|mat[eé]ria.?prima|embalag/, cat: 'Material de uso e consumo e insumos (essencial ou relevante)', cls: 'AVA' },
+  { re: /servi[cç]os? (de )?terceiros|servi[cç]os tomados|m[aã]o de obra terceir|terceiriza/, cat: 'Serviços de terceiros PJ (essencial ou relevante)', cls: 'AVA' },
+  { re: /ped[aá]gio/, cat: 'Pedágio (essencial em transporte)', cls: 'AVA' },
+  { re: /seguro/, cat: 'Seguros (essencial conforme a atividade)', cls: 'AVA' },
+  { re: /ve[ií]culo|frota|caminh/, cat: 'Despesas com veículos (essencial conforme a atividade)', cls: 'AVA' },
+  { re: /uniforme|\bepi\b|equipamento de prote|seguran[cç]a do trabalho|limpeza|higien|dedetiza|vigil[aâ]ncia/, cat: 'Uniformes, EPI, limpeza e segurança (essencial conforme a atividade)', cls: 'AVA' },
+  { re: /servi[cç]os? de transporte|subcontrat|agregado/, cat: 'Serviços de transporte contratados (essencial conforme a atividade)', cls: 'AVA' }
+];
+function categoriaConta(desc) {
+  const d = String(desc || '').toLowerCase().normalize('NFC');
+  for (const r of ECD_REGRAS) if (r.re.test(d)) return { cat: r.cat, cls: ECD_CLS[r.cls] };
+  return { cat: 'Sem regra: confira a natureza da conta', cls: ECD_CLS.AVA };
+}
+
+function lerECD(headers, rows, files) {
+  const hk = headers.map(normKey), ix = n => hk.indexOf(n);
+  const I = { per: ix('periodo'), data: ix('data lancamento'), tipo: ix('tipo lancamento'), conta: ix('conta'), nat: ix('natureza conta'), desc: ix('descricao conta societaria'),
+    vlr: ix('vlr partida'), dc: ix('d c'), num: ix('numero lancamento'), hist: ix('descricao historico'), cnpj: ix('cnpj') };
+  const contas = new Map(); let ymMin = 999999, ymMax = 0;
+  rows.forEach((r, i) => {
+    if (!String(r[I.nat] || '').trim().startsWith('04')) return; // só contas de resultado
+    const conta = String(r[I.conta] == null ? '' : r[I.conta]).trim(); if (!conta) return;
+    const ym = ymDe(r[I.per]) || ymDe(r[I.data]); if (!ym) return;
+    if (ym < ymMin) ymMin = ym; if (ym > ymMax) ymMax = ym;
+    let c = contas.get(conta);
+    if (!c) contas.set(conta, c = { conta, desc: String(r[I.desc] || '').trim(), meses: new Map(), linhas: [] });
+    const enc = /^e/i.test(String(r[I.tipo] || '').trim()), d = String(r[I.dc] || '').trim().toUpperCase() === 'D', v = toNum(r[I.vlr]) || 0;
+    const m = c.meses.get(ym) || { d: 0, c: 0, enc: 0, n: 0 };
+    if (enc) m.enc += v; else if (d) { m.d += v; c.linhas.push(i); } else m.c += v;
+    m.n++; c.meses.set(ym, m);
+  });
+  for (const c of contas.values()) { const s = categoriaConta(c.desc); c.cat = s.cat; c.sug = s.cls; c.ov = null; }
+  const cnpj = I.cnpj >= 0 ? (rows.map(r => digits(r[I.cnpj])).find(c => c.length >= 11) || '') : '';
+  return { headers, rows, I, contas, files, cnpj, ymMin, ymMax, anosOff: new Set(), atrib: {} };
+}
+
+const clsConta = c => c.ov || c.sug;
+/* meses em que a empresa estava no não cumulativo: pela 037 (regime do mês) ou, sem ela, pelos anos de Lucro Real da ECF */
+function mesesNC() {
+  const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap);
+  if (a && a.monthIdx && a.monthIdx.size) { const s = new Set(); for (const [ym, m] of a.monthIdx) if (m.regime === 'NC') s.add(ym); return { meses: s, fonte: '037' }; }
+  const ecf = S.extras.ecf;
+  if (ecf && ecf.anos.length) { const anos = new Set(ecf.anos.filter(x => /real/i.test(x.trib)).map(x => x.ano)); return { anos, fonte: 'ECF' }; }
+  return null;
+}
+/* "já utilizado" na 037: base do PIS das notas com crédito, por conta contábil (F120/F130 = bens do ativo) */
+function jaUtilizado037() {
+  const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap);
+  if (!a || !a.recs || !a.map || a.map.contaCtb == null) return null;
+  const P = new Map(), iN = a.map.nomeCtb;
+  for (const r of a.recs) {
+    if (!((r.vlrPis || 0) > 0)) continue;
+    const ativo = /^F1[23]0/.test(r.registro);
+    const k = ativo ? '#ATIVO' : String(r.v[a.map.contaCtb] == null ? '' : r.v[a.map.contaCtb]).trim() || '#SEM';
+    const p = P.get(k) || { conta: k, nome: ativo ? 'Bens do ativo imobilizado (F120/F130)' : (iN != null ? String(r.v[iN] || '').trim() : ''), base: 0, n: 0, anos: new Map() };
+    p.base += r.bcPis || 0; p.n++; p.anos.set(r.ano, (p.anos.get(r.ano) || 0) + (r.bcPis || 0)); P.set(k, p);
+  }
+  return P;
+}
+function analisarECD(e) {
+  const nc = mesesNC(), ja = jaUtilizado037();
+  e.fonteRegime = nc ? nc.fonte : null; e.com037 = !!ja;
+  const noEscopo = ym => !e.anosOff.has(Math.floor(ym / 100)) && (!nc || (nc.meses ? nc.meses.has(ym) : nc.anos.has(Math.floor(ym / 100))));
+  const anos = new Set(); for (const c of e.contas.values()) for (const ym of c.meses.keys()) anos.add(Math.floor(ym / 100));
+  e.anos = [...anos].sort();
+  e.anosEscopo = e.anos.filter(a => !e.anosOff.has(a) && (!nc || (nc.meses ? [...nc.meses].some(ym => Math.floor(ym / 100) === a) : nc.anos.has(a))));
+  const depr = [...e.contas.values()].find(c => /deprecia/i.test(c.desc) && clsConta(c) !== ECD_CLS.NAO);
+  for (const c of e.contas.values()) {
+    let d = 0, cr = 0, enc = 0, dT = 0, cT = 0;
+    for (const [ym, m] of c.meses) { dT += m.d; cT += m.c; if (noEscopo(ym)) { d += m.d; cr += m.c; enc += m.enc; } }
+    c.valor = r2(d); c.estornos = r2(cr); c.despesa = dT >= cT; // conta de despesa: débitos normais maiores que os créditos normais
+    c.ja = 0; c.jaDe = [];
+  }
+  // já utilizado: mesma conta contábil; bens do ativo na conta de depreciação; as demais, como a analista atribuir
+  e.semConta = [];
+  if (ja) for (const p of ja.values()) {
+    let base = 0; for (const [ano, v] of p.anos) if (e.anosEscopo.includes(ano)) base += v;
+    if (!base) continue;
+    const manual = e.atrib[p.conta] != null && e.atrib[p.conta] !== '';
+    let alvo = manual ? e.contas.get(e.atrib[p.conta]) : e.atrib[p.conta] === '' ? null : p.conta === '#ATIVO' ? depr : e.contas.get(p.conta);
+    if (alvo && !manual && (!alvo.despesa || clsConta(alvo) === ECD_CLS.NAO)) alvo = null; // conta de receita ou fora da análise: a analista decide
+    if (alvo) { alvo.ja = r2(alvo.ja + base); alvo.jaDe.push(p.conta === '#ATIVO' ? 'bens do ativo (F120)' : 'conta ' + p.conta); }
+    if (!alvo || manual) e.semConta.push({ conta: p.conta, nome: p.nome, base: r2(base), n: p.n, atrib: e.atrib[p.conta] });
+  }
+  recalcECD(e);
+  return e;
+}
+function recalcECD(e) {
+  const R = { contas: 0, sim: 0, ava: 0, valor: 0, ja: 0, dif: 0, pis: 0, cof: 0 };
+  for (const c of e.contas.values()) {
+    if (!c.despesa || !c.valor) continue;
+    R.contas++;
+    const cls = clsConta(c);
+    if (cls === ECD_CLS.AVA) R.ava++;
+    if (cls !== ECD_CLS.SIM) continue;
+    R.sim++; R.valor += c.valor; R.ja += c.ja; R.dif += c.valor - c.ja; // como a analista: a diferença negativa também entra no total
+  }
+  R.valor = r2(R.valor); R.ja = r2(R.ja); R.dif = r2(R.dif);
+  // como a analista: 9,25% de uma vez sobre a diferença; o PIS é 1,65% e a COFINS o restante (fecha no centavo)
+  R.base = Math.max(0, R.dif); R.total = r2(R.base * (CRED_PIS + CRED_COF)); R.pis = r2(R.base * CRED_PIS); R.cof = r2(R.total - R.pis);
+  e.res = R; return R;
+}
+
+/* ---------- Excel da ECD ---------- */
+async function buildWorkbookECD(onProgress) {
+  const e = S.extras.ecdA, R = recalcECD(e), B = new XlsxBook();
+  B.title = 'ECD x EFD-Contribuições - ' + (S.empresa.nome || fmtCNPJ(S.extras.cnpj));
+  const sel = [...e.contas.values()].filter(c => c.despesa && c.valor && clsConta(c) === ECD_CLS.SIM).sort((a, b) => a.desc.localeCompare(b.desc, 'pt-BR'));
+  const anosTxt = e.anosEscopo.join(', ');
+  // 1. a dinâmica da analista: conta, valor na ECD, já utilizado na 037, diferença
+  B.addSheet({
+    name: 'DINAMICA ECD x EFD', tab: 'FF1C7A55', grid: false, cols: [34, 18, 18, 18, 46],
+    rows: async (emit) => {
+      emit([{ v: 'Créditos da ECD não aproveitados no EFD-Contribuições — ' + (S.empresa.nome || fmtCNPJ(S.extras.cnpj)), s: XS.title }], { ht: 24 });
+      emit([{ v: 'ECD (I200/I250): débitos normais das contas de despesa em ' + anosTxt + ' (sem o encerramento). Já utilizado: base do PIS das notas com crédito da 037 na mesma conta (bens do ativo na depreciação). Fonte: ' + e.files.join(', '), s: XS.note }]);
+      emit([]);
+      const h0 = emit(['Rótulos de Linha', 'Soma de Vlr Partida', 'já utilizado', 'diferença', 'origem do já utilizado'], { s: XS.headG });
+      for (const c of sel) { const row = emit.proxima(); emit([c.desc, { v: c.valor, s: XS.brl }, { v: c.ja, s: XS.brl }, { v: r2(c.valor - c.ja), f: 'B' + row + '-C' + row, s: XS.brl }, c.jaDe.join(', ') || '—']); }
+      const tr = emit.proxima();
+      emit([{ v: 'Total Geral', s: XS.txtB }, { v: R.valor, f: 'SUM(B' + (h0 + 1) + ':B' + (tr - 1) + ')', s: XS.brlB }, { v: R.ja, f: 'SUM(C' + (h0 + 1) + ':C' + (tr - 1) + ')', s: XS.brlB }, { v: R.dif, f: 'SUM(D' + (h0 + 1) + ':D' + (tr - 1) + ')', s: XS.brlB }]);
+      emit([]);
+      const cr = emit(['Crédito (9,25% da diferença)', null, null, { v: R.total, f: 'ROUND(MAX(0,D' + tr + ')*9.25%,2)', s: XS.brlTot }]);
+      emit(['   PIS (1,65%)', null, null, { v: R.pis, f: 'ROUND(MAX(0,D' + tr + ')*1.65%,2)', s: XS.brl }]);
+      emit(['   COFINS (7,6%)', null, null, { v: R.cof, f: 'D' + cr + '-D' + (cr + 1), s: XS.brl }]);
+      if (e.semConta.length) {
+        emit([]);
+        emit([{ v: 'Créditos da 037 em contas fora da tabela (não entram no já utilizado)', s: XS.bold }]);
+        emit(['Conta na 037', 'Base do PIS', 'notas'], { s: XS.headG });
+        for (const s of e.semConta) emit([s.conta + (s.nome ? ' · ' + s.nome : ''), { v: s.base, s: XS.brl }, { v: s.n, s: XS.int }]);
+      }
+      emit([]);
+      emit([{ v: 'O fato de um valor não constar como crédito no EFD-Contribuições não significa que seja recuperável: confira o enquadramento legal e os documentos.', s: XS.note }]);
+    }
+  });
+  // 2. todas as contas de despesa com a decisão
+  const todas = [...e.contas.values()].filter(c => c.despesa && c.valor).sort((a, b) => b.valor - a.valor);
+  B.addSheet({
+    name: 'CONTAS DE RESULTADO', grid: false, freeze: { row: 1 }, cols: [12, 40, 14, 56, 18, 18, 18], filterRef: 'A1:G' + (todas.length + 1),
+    dv: todas.length ? [{ sqref: 'C2:C' + (todas.length + 1), list: [ECD_CLS.SIM, ECD_CLS.AVA, ECD_CLS.NAO] }] : [],
+    rows: async (emit) => {
+      emit(['Conta', 'Descrição', 'Decisão', 'Categoria', 'Débitos (ECD)', 'Estornos (créditos)', 'Já utilizado (037)'], { s: XS.bHeadHl });
+      for (const c of todas) emit([c.conta, c.desc, clsConta(c), c.ov ? 'Decisão do analista' : c.cat, { v: c.valor, s: XS.eBrlB }, { v: c.estornos, s: XS.eBrlB }, { v: c.ja, s: XS.eBrlB }], { s: XS.bGen });
+    }
+  });
+  // 3. lançamentos das contas incluídas, no período (como a aba "SOMENTE ... REAL" da analista)
+  const H = e.headers.map(h => h == null ? '' : String(h)), hk = H.map(normKey), isV = hk.map(k => /^vlr /.test(k));
+  const nc = mesesNC(), ok = ym => !e.anosOff.has(Math.floor(ym / 100)) && (!nc || (nc.meses ? nc.meses.has(ym) : nc.anos.has(Math.floor(ym / 100))));
+  const lin = []; for (const c of sel) for (const i of c.linhas) { const r = e.rows[i], ym = ymDe(r[e.I.per]) || ymDe(r[e.I.data]); if (ok(ym)) lin.push(r); }
+  B.addSheet({
+    name: 'LANÇAMENTOS SELECIONADOS', grid: false, split: true, freeze: { row: 1 }, landscape: true, filterRef: 'A1:' + colName(H.length - 1) + (lin.length + 1),
+    cols: H.map((h, i) => isV[i] ? 16 : null),
+    rows: async (emit, y) => {
+      emit(H, { s: XS.bHeadHl });
+      for (let k = 0; k < lin.length; k++) { emit(lin[k].map((v, i) => v == null || v === '' ? BLANK : isV[i] && typeof v !== 'number' ? toNum(v) : v), { s: H.map((h, i) => isV[i] ? XS.eBrlB : XS.bGen) }); if (k % 4000 === 3999) await y(Math.round(k / lin.length * 100)); }
+    }
+  });
+  return B.build(onProgress);
+}
+const arquivoECD = () => 'ECD x EFD-Contribuições - ' + nomeArq() + '.xlsx';
 
 /* ================================= interface ================================= */
 const ICON = {
@@ -3907,7 +4135,7 @@ function renderChrome() {
 
 function go(view) {
   // sem planilha importada, as outras etapas abrem com a demonstração (dados fictícios), para dar para conhecer todas as telas
-  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf))) {
+  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf || S.extras.ecdA))) {
     S.ui.aposImport = view;
     if (!busy) { toast('Nenhuma planilha importada: abrindo a demonstração com dados fictícios.', 3500); process({ demo: 'AMBAS' }); }
     return;
@@ -3958,7 +4186,7 @@ function viewImportar() {
   const st = {}; (S.timings || []).forEach(t => { st[t.id] = { state: 'ok', ms: t.ms, detail: t.detail }; });
   const atuais = tiposCarregados().map(t => ({ tipo: t, files: anaDe(t).files }));
   return '<div class="phead"><div><span class="band">Etapa 1 · Importar</span><h1>Solte as planilhas exportadas do <em>SistemaMA</em></h1>' +
-    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa. Pode juntar também a <b>Junção 513</b> e a <b>ECF 0000/0010</b>.</p></div></div>' +
+    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa. Pode juntar também a <b>Junção 513</b>, a <b>ECD</b> (I200/I250) e a <b>ECF 0000/0010</b>.</p></div></div>' +
     '<div class="grid2"><div class="drop" id="drop">' + ICON.file + '<h2>Arraste a 037 e a 047 para cá</h2><p class="muted small">Os arquivos são lidos neste computador, aos pedaços: planilhas de 80 mil linhas carregam sem travar. Nada é enviado para servidores.</p>' +
     '<div class="toolbar" style="justify-content:center"><button class="btn primary big" data-act="pick" type="button">Escolher arquivos</button></div>' +
     '<div class="files-in static" id="drop-files">' + (S.demo ? '' : atuais.flatMap(a => a.files.map(n => fileChip({ name: n }, 0, a.tipo))).join('')) + '</div>' +
@@ -3999,7 +4227,7 @@ async function lerArquivos(files, onStep, onFile) {
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
     const wb = await readWorkbook(f, d => onStep({ id: 'ler', state: 'run', detail: pre + d }));
     const tx = tipoExtra(wb.headers.map(normKey));
-    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
+    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
     if (M.missing.length) throw new Error('"' + f.name + '": não encontrei as colunas ' + M.missing.map(x => FIELDS[x].names[0].toUpperCase()).join(', ') + '. Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo.');
     const tipo = detectTipo(M.hk, wb.rows, M.map), sig = M.hk.join('|');
@@ -4092,6 +4320,7 @@ async function process(input) {
     for (const x of extrasLidas) guardarExtra(x.tipo, x.dados);
     // se a 037 chegou depois da 513, refaz a sugestão da 513 com os fornecedores da 037
     if (feitas.includes('ENT') && S.extras.j513 && !extrasLidas.some(x => x.tipo === 'J513')) analisarJ513(S.extras.j513);
+    if (feitas.includes('ENT') && S.extras.ecdA && !extrasLidas.some(x => x.tipo === 'ECD')) analisarECD(S.extras.ecdA);
     busy = false;
     if (!jobs.length && extrasLidas.length) {
       total('concluído'); renderChrome();
@@ -4317,7 +4546,7 @@ function viewExportar() {
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
   const X5 = extrasDaEmpresa();
-  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
+  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(X5.ecdA ? ['Excel ECD'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
   // abas na ordem do arquivo: as da analista primeiro, as do Revisor no fim
   const tabs = t => t === 'SAI' ? [MODES[t].base, 'REGISTRO', 'MODELO', 'CFOP', 'DIN NCM COM PC - ORDEM CRESCENT', 'NOTAS COM PC', 'NOTAS SEM PC', 'DIN NCM SEM PC', 'RESUMO', 'ITENS A RECUPERAR', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST']
     : [MODES[t].base, 'DINAMICA POR REG', 'DINAM POR BC PC', 'NOTAS COM PC', 'DINAMICA POR NCM', 'NOTAS SEM PC', 'RESUMO', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST'];
@@ -4327,6 +4556,7 @@ function viewExportar() {
     '<section class="card"><div class="card-h"><h2>Tudo pronto para baixar?</h2><span class="sub">' + esc(fmtCNPJ(S.empresa.cnpj)) + '</span></div><div class="card-b"><ul class="ready">' +
     tl.map(linhaAn).join('') + falta.map(linhaFalta).join('') +
     (X5.j513 ? '<li class="rd ok"><span class="rd-i"></span><div><b>Junção 513 · notas fora do EFD-Contribuições</b><div class="small muted">' + fNum(X5.j513.res.cand.E) + ' entradas · crédito ' + fBRL(X5.j513.res.pis + X5.j513.res.cof) + (X5.j513.res.ava.E + X5.j513.res.ava.S ? ' · ' + (X5.j513.res.ava.E + X5.j513.res.ava.S) + ' notas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
+    (X5.ecdA ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECD · contas de despesa x 037</b><div class="small muted">' + X5.ecdA.res.sim + ' contas incluídas · crédito ' + fBRL(X5.ecdA.res.pis + X5.ecdA.res.cof) + (X5.ecdA.res.ava ? ' · ' + X5.ecdA.res.ava + ' contas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
     (X5.ecf ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECF 0000/0010</b><div class="small muted">Regime de apuração: ' + esc(textoApuracao(X5.ecf)) + '</div></div><span></span></li>' : '') +
     '<li class="rd ' + (nomeOk ? 'ok' : 'warn') + '" id="rd-nome"><span class="rd-i"></span><div class="field"><label for="f-nome">Nome da empresa (capa, carta e nome dos arquivos)</label><input type="text" id="f-nome" value="' + esc(S.empresa.nome) + '" placeholder="Razão social, como deve sair no relatório" autocomplete="off"></div><span></span></li>' +
     (md ? '<li class="rd ok"><span class="rd-i"></span><div><b>Modelo do diagnóstico: ' + esc(md.nome) + '</b><div class="small muted">Modelo próprio, carregado em ' + fData(md.data) + (md.empresaModelo ? ' · empresa do modelo: ' + esc(md.empresaModelo) : '') + '. Fica salvo só neste navegador.</div></div><div class="toolbar"><button class="btn" data-act="modelo" type="button">Trocar</button>' + (temPadrao ? '<button class="btn" data-act="modelo-del" type="button">Usar o padrão da Milk</button>' : '<button class="btn" data-act="modelo-del" type="button">Remover</button>') + '</div></li>'
@@ -4494,6 +4724,11 @@ async function doTudo(btn) {
     if (extrasDaEmpresa().j513) {
       btn.textContent = 'Excel da Junção 513…'; await tick();
       if (await saveFile(arquivoJ513(), await buildWorkbookJ513(), { retry: true })) n++;
+      await sleep(400);
+    }
+    if (extrasDaEmpresa().ecdA) {
+      btn.textContent = 'Excel da ECD…'; await tick();
+      if (await saveFile(arquivoECD(), await buildWorkbookECD(), { retry: true })) n++;
       await sleep(400);
     }
     btn.textContent = 'Gerando o Word…'; await tick();

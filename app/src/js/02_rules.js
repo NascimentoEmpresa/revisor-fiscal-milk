@@ -39,6 +39,8 @@ const FIELDS = {
   part: { names: ['nome participante', 'participante'], req: false },
   cnpjPart: { names: ['cnpj participante'], req: false },
   cpfPart: { names: ['cpf participante'], req: false },
+  contaCtb: { names: ['conta contabil'], req: false },
+  nomeCtb: { names: ['nome contabil'], req: false },
   numDoc: { names: ['numero documento', 'numero do documento'], req: false },
   dataDoc: { names: ['data documento', 'data do documento'], req: false },
   chave: { names: ['chave nf e', 'chave nfe', 'chave'], req: false },
