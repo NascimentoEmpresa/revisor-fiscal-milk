@@ -183,6 +183,8 @@ async function readXlsxStream(file, onProgress) {
     if (hr >= 0 && (!best || sh.ent.usize > best.ent.usize)) best = Object.assign({ hr, cab: head[hr].map(normKey) }, sh);
   }
   if (!best) return null;
+  // ICMS (069/070): a analista acrescenta abas grandes; a exportação do SistemaMA é a primeira aba
+  if (tipoExtra(best.cab) === 'ICMS') best = achadas.find(a => tipoExtra(a.cab) === 'ICMS');
   // Junção 513 já trabalhada: a analista separa ENTRADAS e SAÍDAS em abas; junta as abas com o mesmo cabeçalho
   const mesmas = tipoExtra(best.cab) === 'J513' ? achadas.filter(a => a.cab.filter(Boolean).join('|').startsWith(best.cab.filter(Boolean).join('|').slice(0, 200))) : [best];
   if (mesmas.length > 1) {

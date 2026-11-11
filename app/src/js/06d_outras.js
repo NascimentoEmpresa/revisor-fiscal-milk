@@ -17,11 +17,12 @@ function quadroResumo() {
 }
 
 function viewOutras() {
-  const X = extrasDaEmpresa(), j = X.j513, ecf = X.ecf, ecdA = X.ecdA;
+  const X = extrasDaEmpresa(), j = X.j513, ecf = X.ecf, ecdA = X.ecdA, icS = X.icmsS;
   let h = '<div class="phead"><div><span class="band">Etapa 5 · Outras planilhas</span><h1>Planilhas <em>complementares</em> do SistemaMA</h1>' +
-    '<p>A <b>ECD</b> (I200/I250) mostra as despesas contabilizadas que podem dar crédito e não foram aproveitadas na 037. A <b>Junção 513</b> (EFD ICMS/IPI + EFD-Contribuições, C100/C170) mostra as notas que estão no SPED ICMS e não no SPED Contribuições. A <b>ECF 0000/0010</b> traz a forma de tributação e de apuração de cada ano. As duas entram no Excel e no Word desta empresa.</p></div>' +
+    '<p>A <b>ECD</b> (I200/I250) mostra as despesas contabilizadas que podem dar crédito e não foram aproveitadas na 037. A <b>Junção 513</b> (EFD ICMS/IPI + EFD-Contribuições, C100/C170) mostra as notas que estão no SPED ICMS e não no SPED Contribuições. A <b>070</b> da EFD ICMS/IPI, com os SPEDs (.txt, registro 0150), mostra o ICMS de CT-e em transporte isento dentro do RS. A <b>ECF 0000/0010</b> traz a forma de tributação e de apuração de cada ano.</p></div>' +
     '<div class="toolbar"><button class="btn" data-act="pick" type="button">Importar planilhas</button></div></div>';
-  if (!j && !ecf && !ecdA) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
+  if (!j && !ecf && !ecdA && !icS && !X.icmsE && !X.ie0150) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
+  if (icS || X.icmsE || X.ie0150) h += cardICMS(icS, X);
   if (ecdA) h += cardECD(ecdA);
   if (j) h += cardJ513(j);
   if (ecf) h += cardECF(ecf);
@@ -60,6 +61,37 @@ function cardJ513(j) {
       : '<p class="muted small">Nenhuma nota neste filtro.</p>') +
     '<p class="small muted" style="margin-top:10px">Crédito de 1,65% + 7,6% sobre o valor da nota nas entradas COM CREDITO, só nos meses não cumulativos da 037. As sugestões vêm do que o mesmo fornecedor vende nas notas da 037. Uma decisão sua vale para esta nota.</p>' +
     '</div></section>';
+}
+
+function cardICMS(c, X) {
+  if (!c) return '<section class="card"><div class="card-h"><h2>ICMS · EFD ICMS/IPI</h2></div><div class="card-b"><p>' +
+    (X.icmsE ? 'A 069 (entradas) foi lida: ' + fNum(X.icmsE.rows.length) + ' linhas. ' : '') + (X.ie0150 ? fNum(X.ie0150.files.length) + ' SPED da EFD ICMS lidos (registro 0150, ' + fNum(X.ie0150.ie.size) + ' participantes). ' : '') +
+    'Importe a <b>070 (saídas)</b> da EFD ICMS/IPI para o Revisor procurar os CT-e com ICMS em transporte isento dentro do RS.</p></div></section>';
+  const R = c.res, todos = S.ui.icmsTodos, relev = x => x.sel || c.periodos[x.part] || (x.sug && !x.sug.sem);
+  const nRel = [...c.tom.values()].filter(relev).length, lst = [...c.tom.values()].filter(x => todos || relev(x)).sort((a, b) => b.sel - a.sel || b.icms - a.icms);
+  const linha = x => {
+    const sug = x.sug && !x.sug.sem ? 'DE ' + ymTxt(x.sug.ini) + ' A ' + ymTxt(x.sug.fim) : '';
+    return '<tr><td><div>' + esc(x.nome) + '</div><div class="small muted mono">' + esc(fmtCNPJ(x.part)) + '</div></td>' +
+      '<td class="n">' + fNum(x.n) + '</td><td class="n">' + fBRL(x.icms) + '</td>' +
+      '<td><input type="text" class="mono small" style="width:100%;min-width:200px" data-ie="' + esc(x.part) + '" value="' + esc(c.periodos[x.part] || '') + '" placeholder="' + esc(sug ? 'sugerido pelo 0150: ' + sug : 'DE dd/mm/aaaa A dd/mm/aaaa · DESDE · NÃO') + '" aria-label="Período da inscrição estadual de ' + esc(x.nome) + '">' +
+      '<div class="small' + (x.invalido ? '" style="color:var(--risk)' : ' muted') + '">' + (x.invalido ? 'Não entendi o período. Use "DE dd/mm/aaaa A dd/mm/aaaa", "DESDE dd/mm/aaaa" ou "NÃO".' : x.fonte === 'SEFAZ (analista)' ? 'Período da SEFAZ (informado)' : x.fonte ? 'Sugerido pelo 0150: confira na SEFAZ' : X.ie0150 ? 'Não aparece com inscrição no 0150' : 'Informe o período ou importe os SPEDs (0150)') + '</div></td>' +
+      '<td class="n"><b>' + fBRL(x.sel) + '</b><div class="small muted">' + fNum(x.selN) + ' CT-e</div></td></tr>';
+  };
+  const anos = [...R.anos].sort((a, b) => a[0] - b[0]);
+  return '<section class="card"><div class="card-h"><h2>ICMS · CT-e com ICMS em transporte isento no RS</h2><span class="sub">' + esc(c.files.join(', ')) + '</span></div><div class="card-b">' +
+    '<p class="small" style="margin-top:0">CT-e emitidos pela empresa com início e fim no RS e ICMS destacado. Se o tomador tinha inscrição estadual ativa no RS no mês, a prestação é isenta (Decreto 55.371/2020, a partir de 23/07/2020) e o ICMS pode ser recuperado.</p>' +
+    (!X.ie0150 ? '<div class="err-box" style="margin-bottom:12px">Sem os SPEDs da EFD ICMS (.txt), o Revisor não sugere o período da inscrição dos tomadores. Importe os arquivos .txt do período (o Revisor lê só o registro 0150) ou informe o período de cada tomador consultado na SEFAZ.</div>' : '') +
+    '<div class="kpis">' + kpi('ICMS a recuperar', fBRLc(R.icms), fBRL(R.icms) + ' em ' + fNum(R.n) + ' CT-e') + kpi('Tomadores', fNum(R.tomadores), R.conf + ' com período da SEFAZ · ' + R.sug + ' sugeridos pelo 0150') +
+    kpi('Reflexo no PIS/COFINS', fBRLc(R.pc), 'ICMS que volta à base (a recolher)') + kpi('Reflexo no crédito presumido', fBRLc(R.presum), c.presumido ? '20% do ICMS recuperado' : 'informe o período abaixo') + '</div>' +
+    '<div class="toolbar" style="margin:14px 0 8px;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
+    '<div class="field" style="max-width:190px"><label for="f-icorte">Prazo de 5 anos: a partir de</label><input type="text" id="f-icorte" class="mono" value="' + esc(ymTxt(c.corteYm)) + '" placeholder="mm/aaaa"></div>' +
+    '<div class="field" style="max-width:270px"><label for="f-ipres">Crédito presumido de 20% (período)</label><input type="text" id="f-ipres" class="mono" value="' + esc(c.presumido || '') + '" placeholder="Ex.: 01/2022 a 09/2025"></div>' +
+    '<span class="seg"><button type="button" data-icms-todos="0" aria-pressed="' + !todos + '">A conferir <span class="ct">' + nRel + '</span></button><button type="button" data-icms-todos="1" aria-pressed="' + !!todos + '">Todos <span class="ct">' + c.tom.size + '</span></button></span>' +
+    '<span style="flex:1"></span><button class="btn" data-oact="icms-xlsx" type="button">' + ICON.dl + 'Excel do ICMS</button></div>' +
+    (anos.length ? '<div class="tbl-wrap" style="margin-bottom:12px"><table><thead><tr><th>Ano</th><th class="n">CT-e</th><th class="n">ICMS a recuperar</th><th class="n">Reflexo crédito presumido</th><th class="n">Reflexo PIS/COFINS</th></tr></thead><tbody>' +
+      anos.map(([a, y]) => '<tr><td class="mono">' + a + '</td><td class="n">' + fNum(y.n) + '</td><td class="n"><b>' + fBRL(y.icms) + '</b></td><td class="n">' + fBRL(y.presum) + '</td><td class="n">' + fBRL(y.pc) + '</td></tr>').join('') + '</tbody></table></div>' : '') +
+    '<div class="tbl-wrap"><table><thead><tr><th>Tomador</th><th class="n">CT-e RS/RS</th><th class="n">ICMS</th><th>CONTRIB. ICMS (período da inscrição na SEFAZ)</th><th class="n">A recuperar</th></tr></thead><tbody>' + lst.map(linha).join('') + '</tbody></table></div>' +
+    '<p class="small muted" style="margin-top:10px">O período informado vale por mês (como na planilha da analista). Sem período informado, vale a inscrição que aparece no 0150 de cada mês. A recuperação depende da SEFAZ/RS, que verifica se o tomador aproveitou o crédito.</p></div></section>';
 }
 
 function cardECD(e) {
@@ -120,15 +152,26 @@ function bindOutras() {
     if (ec) { const c = S.extras.ecdA.contas.get(ec.dataset.ecd); c.ov = ec.value === c.sug ? null : ec.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     const at = e.target.closest('select[data-ecd-atrib]');
     if (at) { S.extras.ecdA.atrib[at.dataset.ecdAtrib] = at.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
+    const ie = e.target.closest('input[data-ie]');
+    if (ie) { S.extras.icmsS.periodos[ie.dataset.ie] = ie.value.trim(); analisarICMS(S.extras.icmsS); refreshOutras(); return; }
+    if (e.target.id === 'f-icorte') { const p = periodoIE(e.target.value); if (p && p.ini) S.extras.icmsS.corte = p.ini; analisarICMS(S.extras.icmsS); refreshOutras(); return; }
+    if (e.target.id === 'f-ipres') { S.extras.icmsS.presumido = e.target.value.trim(); analisarICMS(S.extras.icmsS); refreshOutras(); return; }
     if (e.target.id === 'f-ecd') { const b = toNum(e.target.value) || 0; S.extras.ecd = { cnpj: S.extras.cnpj || digits(S.empresa.cnpj), base: b > 0 ? b : 0 }; refreshOutras(); }
   };
   v.onclick = async e => {
     const f = e.target.closest('[data-jf]'); if (f) { S.ui.jf = f.dataset.jf; S.ui.jn = 80; return refreshOutras(); }
     const t = e.target.closest('[data-jt]'); if (t) { S.ui.jt = t.dataset.jt; S.ui.jn = 80; return refreshOutras(); }
     const ea = e.target.closest('[data-ecd-ano]'); if (ea) { const a = +ea.dataset.ecdAno, s = S.extras.ecdA.anosOff; if (s.has(a)) s.delete(a); else s.add(a); analisarECD(S.extras.ecdA); return refreshOutras(); }
+    const it = e.target.closest('[data-icms-todos]'); if (it) { S.ui.icmsTodos = it.dataset.icmsTodos === '1'; return refreshOutras(); }
     const et = e.target.closest('[data-ecd-todas]'); if (et) { S.ui.ecdTodas = et.dataset.ecdTodas === '1'; return refreshOutras(); }
     const b = e.target.closest('[data-oact]'); if (!b) return;
     if (b.dataset.oact === 'j-mais') { S.ui.jn = (S.ui.jn || 80) + 200; return refreshOutras(); }
+    if (b.dataset.oact === 'icms-xlsx') {
+      b.disabled = true; const lbl = b.innerHTML;
+      try { b.textContent = 'Gerando…'; await saveFile(arquivoICMS(), await buildWorkbookICMS()); }
+      catch (er) { console.error(er); toast('Não foi possível gerar o Excel: ' + er.message, 5000); }
+      b.disabled = false; b.innerHTML = lbl; return;
+    }
     if (b.dataset.oact === 'ecd-xlsx') {
       b.disabled = true; const lbl = b.innerHTML;
       try { b.textContent = 'Gerando…'; await saveFile(arquivoECD(), await buildWorkbookECD()); }

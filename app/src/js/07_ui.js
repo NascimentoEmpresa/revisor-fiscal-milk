@@ -58,7 +58,7 @@ function renderChrome() {
 
 function go(view) {
   // sem planilha importada, as outras etapas abrem com a demonstração (dados fictícios), para dar para conhecer todas as telas
-  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf || S.extras.ecdA))) {
+  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf || S.extras.ecdA || S.extras.icmsS || S.extras.icmsE || S.extras.ie0150))) {
     S.ui.aposImport = view;
     if (!busy) { toast('Nenhuma planilha importada: abrindo a demonstração com dados fictícios.', 3500); process({ demo: 'AMBAS' }); }
     return;
@@ -109,7 +109,7 @@ function viewImportar() {
   const st = {}; (S.timings || []).forEach(t => { st[t.id] = { state: 'ok', ms: t.ms, detail: t.detail }; });
   const atuais = tiposCarregados().map(t => ({ tipo: t, files: anaDe(t).files }));
   return '<div class="phead"><div><span class="band">Etapa 1 · Importar</span><h1>Solte as planilhas exportadas do <em>SistemaMA</em></h1>' +
-    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa. Pode juntar também a <b>Junção 513</b>, a <b>ECD</b> (I200/I250) e a <b>ECF 0000/0010</b>.</p></div></div>' +
+    '<p>Consultas PREMIUM, <b>EFD - Contribuições</b>: <b>037 - Entradas</b> e <b>047 - Saídas</b>, Todos os Registros - Completo. Selecione as duas juntas (e todos os arquivos, se o sistema dividiu por ano): o Revisor reconhece cada uma e monta as duas análises da empresa. Pode juntar também a <b>Junção 513</b>, a <b>ECD</b> (I200/I250), a <b>ECF 0000/0010</b>, a <b>069/070</b> da EFD ICMS/IPI e os SPEDs da EFD ICMS (.txt).</p></div></div>' +
     '<div class="grid2"><div class="drop" id="drop">' + ICON.file + '<h2>Arraste a 037 e a 047 para cá</h2><p class="muted small">Os arquivos são lidos neste computador, aos pedaços: planilhas de 80 mil linhas carregam sem travar. Nada é enviado para servidores.</p>' +
     '<div class="toolbar" style="justify-content:center"><button class="btn primary big" data-act="pick" type="button">Escolher arquivos</button></div>' +
     '<div class="files-in static" id="drop-files">' + (S.demo ? '' : atuais.flatMap(a => a.files.map(n => fileChip({ name: n }, 0, a.tipo))).join('')) + '</div>' +
@@ -144,13 +144,18 @@ function showImportError(msg) { const e = $('#imp-err'); if (e) e.innerHTML = '<
 /* Vários arquivos de uma vez: cada um é lido, reconhecido pelo cabeçalho (037 ou 047) e entra na sua análise.
    Arquivos da mesma planilha (a 037 dividida por ano, por exemplo) são unidos. */
 async function lerArquivos(files, onStep, onFile) {
-  const t0 = now(), grupos = new Map(), extras = []; let nLin = 0;
+  const t0 = now(), grupos = new Map(), extras = [], speds = [], ignorados = []; let nLin = 0;
   for (let k = 0; k < files.length; k++) {
     const f = files[k], pre = files.length > 1 ? 'Arquivo ' + (k + 1) + ' de ' + files.length + ' · ' : '';
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
+    if (/\.txt$/i.test(f.name || '')) { // SPED da EFD ICMS/IPI: só o registro 0150 (inscrição estadual dos participantes)
+      const s = lerSped0150(await f.text(), f.name);
+      if (s) { speds.push(s); if (onFile) onFile(k, 'SPED'); } else ignorados.push(f.name);
+      continue;
+    }
     const wb = await readWorkbook(f, d => onStep({ id: 'ler', state: 'run', detail: pre + d }));
     const tx = tipoExtra(wb.headers.map(normKey));
-    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
+    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : tx === 'ICMS' ? lerICMS(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
     if (M.missing.length) throw new Error('"' + f.name + '": não encontrei as colunas ' + M.missing.map(x => FIELDS[x].names[0].toUpperCase()).join(', ') + '. Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo.');
     const tipo = detectTipo(M.hk, wb.rows, M.map), sig = M.hk.join('|');
@@ -173,7 +178,8 @@ async function lerArquivos(files, onStep, onFile) {
   const out = lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
   const c0 = lst.map(g => g.cnpj).find(Boolean) || (S.loaded ? digits(S.empresa.cnpj) : '');
   for (const x of extras) if (c0 && x.dados.cnpj && x.dados.cnpj !== c0) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ', e as planilhas da análise são do CNPJ ' + fmtCNPJ(c0) + '. Importe as planilhas de uma empresa por vez.');
-  out.extras = extras;
+  out.extras = extras; out.speds = speds; out.ignorados = ignorados;
+  if (!out.length && !extras.length && !speds.length && ignorados.length) throw new Error('Os arquivos .txt enviados não são SPED da EFD ICMS/IPI: ' + ignorados.slice(0, 3).join(', ') + (ignorados.length > 3 ? '…' : '') + '. Do SPED, o Revisor lê só o registro 0150 da EFD ICMS/IPI.');
   return out;
 }
 
@@ -220,12 +226,12 @@ async function process(input) {
   else if (input.demo) showFiles((input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).map(t => ({ name: MODES[t].titulo + '.xlsx' })));
   paint(); total('processando…');
   const errEl = $('#imp-err'); if (errEl) errEl.innerHTML = '';
-  const feitas = []; let extrasLidas = [];
+  const feitas = []; let extrasLidas = [], spedsLidos = [];
   try {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
     for (let k = 0; k < jobs.length; k++) {
       const j = jobs[k], md = MODES[j.demo || j.pre.tipo], pref = jobs.length > 1 ? (k + 1) + ' de ' + jobs.length + ' · ' : '';
@@ -240,14 +246,16 @@ async function process(input) {
       if (k < jobs.length - 1) await sleep(500);
     }
     if (feitas.length > 1 && S.tipo !== feitas[0]) ativarAnalise(feitas[0]);
+    if (spedsLidos.length) guardarSped0150(spedsLidos);
     for (const x of extrasLidas) guardarExtra(x.tipo, x.dados);
+    if (S.extras.icmsS && (spedsLidos.length || feitas.length) && !extrasLidas.some(x => x.tipo === 'ICMS' && x.dados.tipo === 'S')) analisarICMS(S.extras.icmsS);
     // se a 037 chegou depois da 513, refaz a sugestão da 513 com os fornecedores da 037
     if (feitas.includes('ENT') && S.extras.j513 && !extrasLidas.some(x => x.tipo === 'J513')) analisarJ513(S.extras.j513);
     if (feitas.includes('ENT') && S.extras.ecdA && !extrasLidas.some(x => x.tipo === 'ECD')) analisarECD(S.extras.ecdA);
     busy = false;
-    if (!jobs.length && extrasLidas.length) {
+    if (!jobs.length && (extrasLidas.length || spedsLidos.length)) {
       total('concluído'); renderChrome();
-      toast(extrasLidas.map(x => EXTRA_NOME[x.tipo]).join(' e ') + ': ' + (extrasLidas.length > 1 ? 'reconhecidas' : 'reconhecida') + '.' + (!S.loaded && extrasLidas.some(x => x.tipo === 'J513') ? ' Importe também a 037 para o Revisor sugerir a classificação das notas pelo fornecedor.' : ''), 5000);
+      toast(extrasLidas.map(x => EXTRA_NOME[x.tipo]).concat(spedsLidos.length ? [spedsLidos.length + ' SPED da EFD ICMS (0150)'] : []).join(' e ') + ': ' + (extrasLidas.length > 1 ? 'reconhecidas' : 'reconhecida') + '.' + (!S.loaded && extrasLidas.some(x => x.tipo === 'J513') ? ' Importe também a 037 para o Revisor sugerir a classificação das notas pelo fornecedor.' : ''), 5000);
       await sleep(650); go('outras'); return;
     }
     toast(feitas.length > 1 ? 'Planilhas ' + feitas.map(t => MODES[t].planilha).join(' e ') + ' processadas. Alterne entre elas no topo da tela.'
@@ -469,7 +477,7 @@ function viewExportar() {
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
   const X5 = extrasDaEmpresa();
-  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(X5.ecdA ? ['Excel ECD'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
+  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(X5.ecdA ? ['Excel ECD'] : []).concat(X5.icmsS ? ['Excel ICMS'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
   // abas na ordem do arquivo: as da analista primeiro, as do Revisor no fim
   const tabs = t => t === 'SAI' ? [MODES[t].base, 'REGISTRO', 'MODELO', 'CFOP', 'DIN NCM COM PC - ORDEM CRESCENT', 'NOTAS COM PC', 'NOTAS SEM PC', 'DIN NCM SEM PC', 'RESUMO', 'ITENS A RECUPERAR', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST']
     : [MODES[t].base, 'DINAMICA POR REG', 'DINAM POR BC PC', 'NOTAS COM PC', 'DINAMICA POR NCM', 'NOTAS SEM PC', 'RESUMO', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST'];
@@ -479,6 +487,7 @@ function viewExportar() {
     '<section class="card"><div class="card-h"><h2>Tudo pronto para baixar?</h2><span class="sub">' + esc(fmtCNPJ(S.empresa.cnpj)) + '</span></div><div class="card-b"><ul class="ready">' +
     tl.map(linhaAn).join('') + falta.map(linhaFalta).join('') +
     (X5.j513 ? '<li class="rd ok"><span class="rd-i"></span><div><b>Junção 513 · notas fora do EFD-Contribuições</b><div class="small muted">' + fNum(X5.j513.res.cand.E) + ' entradas · crédito ' + fBRL(X5.j513.res.pis + X5.j513.res.cof) + (X5.j513.res.ava.E + X5.j513.res.ava.S ? ' · ' + (X5.j513.res.ava.E + X5.j513.res.ava.S) + ' notas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
+    (X5.icmsS ? '<li class="rd ok"><span class="rd-i"></span><div><b>070 · CT-e com ICMS em transporte isento no RS</b><div class="small muted">' + fNum(X5.icmsS.res.n) + ' CT-e · ICMS a recuperar ' + fBRL(X5.icmsS.res.icms) + (X5.icmsS.res.sug ? ' · ' + X5.icmsS.res.sug + ' tomadores com período sugerido pelo 0150, a confirmar na SEFAZ' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
     (X5.ecdA ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECD · contas de despesa x 037</b><div class="small muted">' + X5.ecdA.res.sim + ' contas incluídas · crédito ' + fBRL(X5.ecdA.res.pis + X5.ecdA.res.cof) + (X5.ecdA.res.ava ? ' · ' + X5.ecdA.res.ava + ' contas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
     (X5.ecf ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECF 0000/0010</b><div class="small muted">Regime de apuração: ' + esc(textoApuracao(X5.ecf)) + '</div></div><span></span></li>' : '') +
     '<li class="rd ' + (nomeOk ? 'ok' : 'warn') + '" id="rd-nome"><span class="rd-i"></span><div class="field"><label for="f-nome">Nome da empresa (capa, carta e nome dos arquivos)</label><input type="text" id="f-nome" value="' + esc(S.empresa.nome) + '" placeholder="Razão social, como deve sair no relatório" autocomplete="off"></div><span></span></li>' +
@@ -647,6 +656,11 @@ async function doTudo(btn) {
     if (extrasDaEmpresa().j513) {
       btn.textContent = 'Excel da Junção 513…'; await tick();
       if (await saveFile(arquivoJ513(), await buildWorkbookJ513(), { retry: true })) n++;
+      await sleep(400);
+    }
+    if (extrasDaEmpresa().icmsS) {
+      btn.textContent = 'Excel do ICMS…'; await tick();
+      if (await saveFile(arquivoICMS(), await buildWorkbookICMS(), { retry: true })) n++;
       await sleep(400);
     }
     if (extrasDaEmpresa().ecdA) {

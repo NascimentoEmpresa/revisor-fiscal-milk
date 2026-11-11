@@ -7,16 +7,17 @@
    A classificação das notas da 513 usa o que o MESMO fornecedor vende nas notas da 037 (NCM, descrição e a
    classificação do Revisor), porque a 513 não traz os itens da nota. */
 
-S.extras = { cnpj: '', j513: null, ecf: null, ecd: null, ecdA: null };
+S.extras = { cnpj: '', j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null };
 
 /* reconhece a planilha complementar pelo cabeçalho (normalizado por normKey) */
 function tipoExtra(hk) {
   if (hk.includes('existe efd') && hk.includes('existe con') && hk.some(k => k.startsWith('vlr operacional'))) return 'J513';
   if (hk.includes('forma tributacao') && hk.includes('forma apuracao') && hk.includes('periodo inicial')) return 'ECF';
   if (hk.includes('vlr partida') && hk.includes('d c') && hk.includes('tipo lancamento') && hk.includes('conta')) return 'ECD';
+  if (hk.includes('cst icms') && hk.includes('indicador emitente') && hk.includes('uf origem destino') && hk.includes('vlr icms')) return 'ICMS';
   return null;
 }
-const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento' };
+const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
 
 /* ano-mês (aaaamm) de uma data em texto dd/mm/aaaa, Date ou número de série do Excel */
 function ymDe(v) {
@@ -180,14 +181,16 @@ const tribAtualECF = ecf => ecf && ecf.anos.length ? ecf.anos[ecf.anos.length - 
 /* ---------- guarda junto da empresa ---------- */
 function guardarExtra(tipo, dados) {
   const c = digits(dados.cnpj || '');
-  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecdA: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
+  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
   if (!S.extras.cnpj) S.extras.cnpj = c;
   if (tipo === 'J513') S.extras.j513 = analisarJ513(dados);
   if (tipo === 'ECF') { S.extras.ecf = dados; if (S.extras.ecdA) analisarECD(S.extras.ecdA); }
   if (tipo === 'ECD') S.extras.ecdA = analisarECD(dados);
+  if (tipo === 'ICMS') { if (dados.tipo === 'S') S.extras.icmsS = analisarICMS(Object.assign(dados, { corte: dados.corte || (S.extras.icmsS ? S.extras.icmsS.corte : null) })); else S.extras.icmsE = dados; }
+  if (tipo === 'ECF' && S.extras.icmsS) analisarICMS(S.extras.icmsS);
 }
 /* complementares só valem para a empresa que está na tela */
-const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null, ecdA: null };
+const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null };
 
 /* ---------- Excel da Junção 513 ---------- */
 async function buildWorkbookJ513(onProgress) {
