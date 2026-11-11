@@ -133,13 +133,14 @@ async function preencherModelo(bytes, d) {
   // valores do quadro final
   const linhaE = R.ENT ? { t: 'C100 Notas lançadas sem Créditos', ...R.ENT.pot } : null;
   const icm = R.SAI && R.SAI.icms && R.SAI.icms.n && !R.SAI.icms.residual ? R.SAI.icms : null;
-  const linhaI = icm ? { t: 'Exclusão do ICMS da BC Pis/Cofins', base: icm.base, pis: icm.pis, cof: icm.cof } : null;
+  const linhaI = icm ? { t: 'Exclusão do ICMS da BC Pis/Cofins', base: icm.base, pis: icm.pis, cof: icm.cof } : d.excl ? { t: 'Exclusão do ICMS da BC Pis/Cofins', ...d.excl } : null;
+  const linhaA = d.anul ? { t: 'Crédito não apropriado - anulações de CT-e', ...d.anul } : null;
   const linhaZ = R.SAI && (R.SAI.aliqZero.pis + R.SAI.aliqZero.cof) > 0 ? { t: 'PIS e COFINS PAGOS ALIQUOTA 0', ...R.SAI.aliqZero } : null;
   const linhaO = R.SAI && (R.SAI.outrasReceitas.pis + R.SAI.outrasReceitas.cof) > 0 ? { t: 'PIS e COFINS sobre receitas não tributáveis', ...R.SAI.outrasReceitas } : null;
   // como no RESUMO da analista: notas sem crédito (037), notas não escrituradas (513), créditos da ECD, exclusão do ICMS (047)
   const linhaN = d.j513 && (d.j513.pis + d.j513.cof) > 0 ? { t: 'Notas não escrituradas no SPED Contribuições', ...d.j513 } : null;
   const linhaD = d.ecd ? { t: 'Créditos - ECD', ...d.ecd } : null;
-  const linhas = [linhaE, linhaN, linhaD, linhaI, linhaZ, linhaO].filter(Boolean);
+  const linhas = [linhaE, linhaN, linhaD, linhaI, linhaA, linhaZ, linhaO].filter(Boolean);
   const totalGeral = r2(linhas.reduce((a, l) => a + l.pis + l.cof, 0));
 
   const temRegime = !!(R.ENT || R.SAI);
@@ -227,8 +228,20 @@ async function preencherModelo(bytes, d) {
     else if (i === imgDepois.get('resumo')) {
       const rows = linhas.map(l => [l.t, fBRL(l.base), fBRL(l.pis), fBRL(l.cof), fBRL(l.pis + l.cof)]);
       rows.push(['', fBRL(linhas.reduce((a, l) => a + l.base, 0)), fBRL(linhas.reduce((a, l) => a + l.pis, 0)), fBRL(linhas.reduce((a, l) => a + l.cof, 0)), fBRL(totalGeral)]);
+      const pOrig = p;
       p = dxTabela([{ h: '', w: 3300 }, { h: 'Base de Cálculo Total', w: 1700, right: true }, { h: 'PIS (1,65%)', w: 1300, right: true }, { h: 'COFINS (7,60%)', w: 1400, right: true }, { h: 'TOTAL', w: 1400, right: true }], rows, { totalLast: true }) +
         (linhaD ? '' : '<w:p>' + DX.pPr(p) + DX.hlRun('Acrescentar ao quadro os créditos levantados na ECD (energia elétrica, fretes, depreciação), se houver.', DX.rPr(p)) + '</w:p>');
+      // quadro geral (BLOCO, DESCRIÇÃO, PERÍODO, VALOR), como no diagnóstico da MAXXI: quando há ICMS ou valores a recolher
+      const G = d.geral;
+      if (G && (G.rec.some(x => x.bloco !== 'PIS/COFINS') || G.recolher.length)) {
+        const cg = [{ h: 'BLOCO', w: 1300 }, { h: 'DESCRIÇÃO', w: 4300 }, { h: 'PERÍODO', w: 1800 }, { h: 'VALOR (R$)', w: 1700, right: true }];
+        const rr = l => [l.bloco, l.desc, l.per, fBRL(l.v)], vazio = '<w:p>' + DX.pPr(pOrig) + '</w:p>';
+        p += vazio + dxTabela(cg, G.rec.map(rr).concat([['', 'TOTAL A RECUPERAR', '', fBRL(G.totRec)]]), { totalLast: true }) +
+          (G.recolher.length ? vazio + dxTabela(cg, G.recolher.map(rr).concat([['', 'TOTAL A RECOLHER', '', fBRL(G.totRecolher)]]), { totalLast: true }) : '') +
+          '<w:p>' + DX.pPr(pOrig) + DX.hlRun('Conferir o quadro geral e acrescentar os pontos fora do SistemaMA (valores não recolhidos, créditos a estornar, PER/DCOMP).', DX.rPr(pOrig)) + '</w:p>';
+        relat.feitos.push('Quadro geral a recuperar e a recolher (' + G.rec.length + ' + ' + G.recolher.length + ' linhas)');
+        relat.pendentes.push('Conferir o quadro geral (pontos fora do SistemaMA)');
+      }
       relat.feitos.push('Quadro-resumo dos valores' + (linhaN ? ' (com as notas não escrituradas da Junção 513)' : '') + (linhaD ? ' (com os créditos da ECD)' : ''));
       if (!linhaD) relat.pendentes.push('Créditos da ECD no quadro-resumo (energia, fretes, depreciação)');
     }
@@ -296,5 +309,6 @@ const modeloBytes = () => (S.modelo && S.modelo.bytes) || modeloPadrao();
 function dadosModelo() {
   const X = extrasDaEmpresa(), Q = quadroResumo();
   return { nome: S.empresa.nome, cnpj: S.empresa.cnpj, cidade: S.settings.cidade, ent: resumoDe('ENT'), sai: resumoDe('SAI'), logoCliente: S.logoCliente || null,
-    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
+    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, geral: quadroGeral(),
+    excl: (l => l && l.v && /070 x 047/.test(l.t) && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'icms')), anul: (l => l && l.v && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'anul')), ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
 }

@@ -485,7 +485,7 @@ function runChecksSai() {
     });
   }
   // 10. vendas tributadas sem NCM (fora as consolidadas)
-  const semNcm = S.com.filter(r => !r.ncm && !/^a1/i.test(r.registro) && !REG_CONSOLIDADO.test(r.registro));
+  const semNcm = S.com.filter(r => !r.ncm && !/^a1/i.test(r.registro) && !REG_CONSOLIDADO.test(r.registro) && !/^\d3(5[1-9]|60)$/.test(r.cfop || ''));
   add({
     id: 'ncm', t: 'Vendas tributadas sem NCM', st: semNcm.length ? 'warn' : 'ok', n: semNcm.length, v: semNcm.length ? r2(semNcm.reduce((a, r) => a + r.vlrItem, 0)) : null,
     txt: semNcm.length ? fNum(semNcm.length) + ' itens sem NCM: a classificação depende da descrição.' : 'Todos os itens de mercadoria têm NCM.',
@@ -515,6 +515,10 @@ function buildResumo() {
     const cat = { zero: { base: 0, pis: 0, cof: 0 }, outras: { base: 0, pis: 0, cof: 0 } };
     for (const r of S.alvo) { const c = creditOf(r); if (!c) continue; const g = r.g, k = !r.ov && !(g.dec && g.dec !== g.sug.cls) && /Alíquota zero|Monofásico/.test(g.sug.cat || '') ? 'zero' : 'outras'; cat[k].base += c.base; cat[k].pis += c.pis; cat[k].cof += c.cof; }
     R.aliqZero = cat.zero; R.outrasReceitas = cat.outras;
+    // por categoria (venda de ativo, alíquota zero, exportação...), para o quadro geral
+    const cm = new Map();
+    for (const r of S.alvo) { const c = creditOf(r); if (!c) continue; const g = r.g, k = (!r.ov && !(g.dec && g.dec !== g.sug.cls) && g.sug.cat) || 'Receitas não tributáveis'; const x = cm.get(k) || { cat: k, base: 0, pis: 0, cof: 0, mi: 999999, ma: 0 }; x.base += c.base; x.pis += c.pis; x.cof += c.cof; if (r.ym < x.mi) x.mi = r.ym; if (r.ym > x.ma) x.ma = r.ym; cm.set(k, x); }
+    R.cats = [...cm.values()].map(x => Object.assign(x, { base: r2(x.base), pis: r2(x.pis), cof: r2(x.cof) })).sort((a, b) => (b.pis + b.cof) - (a.pis + a.cof));
     // produtos de alíquota zero ou monofásicos vendidos com tributação (vão para o parágrafo de alíquota zero do diagnóstico)
     const zm = new Map();
     for (const g of S.groups) { if ((g.dec || g.sug.cls) !== CLS.COM || (g.dec && g.dec !== g.sug.cls) || !/Alíquota zero|Monofásico/.test(g.sug.cat || '') || !g.ncm) continue; const k = g.ncm, nr = ncmRule(g.ncm); const x = zm.get(k) || { ncm: g.ncm, nome: nr ? nr.nome : g.descTop, v: 0 }; x.v += g.vlr; zm.set(k, x); }

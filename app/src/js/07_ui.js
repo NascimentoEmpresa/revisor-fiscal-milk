@@ -477,7 +477,7 @@ function viewExportar() {
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
   const X5 = extrasDaEmpresa();
-  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(X5.ecdA ? ['Excel ECD'] : []).concat(X5.icmsS ? ['Excel ICMS'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
+  const itens = tl.map(t => 'Excel ' + MODES[t].planilha).concat(X5.j513 ? ['Excel Junção 513'] : []).concat(X5.ecdA ? ['Excel ECD'] : []).concat(X5.icmsS ? ['Excel ICMS'] : []).concat(X5.icmsS || X5.icmsE ? ['Excel outros pontos'] : []).concat(comModelo ? ['Word no modelo da Milk' + (tl.length > 1 ? ' (037 + 047)' : '')] : tl.map(t => 'Word ' + MODES[t].planilha));
   // abas na ordem do arquivo: as da analista primeiro, as do Revisor no fim
   const tabs = t => t === 'SAI' ? [MODES[t].base, 'REGISTRO', 'MODELO', 'CFOP', 'DIN NCM COM PC - ORDEM CRESCENT', 'NOTAS COM PC', 'NOTAS SEM PC', 'DIN NCM SEM PC', 'RESUMO', 'ITENS A RECUPERAR', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST']
     : [MODES[t].base, 'DINAMICA POR REG', 'DINAM POR BC PC', 'NOTAS COM PC', 'DINAMICA POR NCM', 'NOTAS SEM PC', 'RESUMO', MODES[t].apurado, 'RESUMO NCM', 'CHECKLIST'];
@@ -488,6 +488,7 @@ function viewExportar() {
     tl.map(linhaAn).join('') + falta.map(linhaFalta).join('') +
     (X5.j513 ? '<li class="rd ok"><span class="rd-i"></span><div><b>Junção 513 · notas fora do EFD-Contribuições</b><div class="small muted">' + fNum(X5.j513.res.cand.E) + ' entradas · crédito ' + fBRL(X5.j513.res.pis + X5.j513.res.cof) + (X5.j513.res.ava.E + X5.j513.res.ava.S ? ' · ' + (X5.j513.res.ava.E + X5.j513.res.ava.S) + ' notas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
     (X5.icmsS ? '<li class="rd ok"><span class="rd-i"></span><div><b>070 · CT-e com ICMS em transporte isento no RS</b><div class="small muted">' + fNum(X5.icmsS.res.n) + ' CT-e · ICMS a recuperar ' + fBRL(X5.icmsS.res.icms) + (X5.icmsS.res.sug ? ' · ' + X5.icmsS.res.sug + ' tomadores com período sugerido pelo 0150, a confirmar na SEFAZ' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
+    (X5.icmsS || X5.icmsE ? (() => { const G = quadroGeral(); return '<li class="rd ok"><span class="rd-i"></span><div><b>Outros pontos e quadro geral</b><div class="small muted">Exclusão do ICMS por mês, anulações 1206, devoluções com ICMS · a recuperar ' + fBRL(G.totRec) + (G.totRecolher ? ' · a recolher ' + fBRL(G.totRecolher) : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>'; })() : '') +
     (X5.ecdA ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECD · contas de despesa x 037</b><div class="small muted">' + X5.ecdA.res.sim + ' contas incluídas · crédito ' + fBRL(X5.ecdA.res.pis + X5.ecdA.res.cof) + (X5.ecdA.res.ava ? ' · ' + X5.ecdA.res.ava + ' contas para avaliar' : '') + '</div></div><button class="btn" data-go="outras" type="button">Ver</button></li>' : '') +
     (X5.ecf ? '<li class="rd ok"><span class="rd-i"></span><div><b>ECF 0000/0010</b><div class="small muted">Regime de apuração: ' + esc(textoApuracao(X5.ecf)) + '</div></div><span></span></li>' : '') +
     '<li class="rd ' + (nomeOk ? 'ok' : 'warn') + '" id="rd-nome"><span class="rd-i"></span><div class="field"><label for="f-nome">Nome da empresa (capa, carta e nome dos arquivos)</label><input type="text" id="f-nome" value="' + esc(S.empresa.nome) + '" placeholder="Razão social, como deve sair no relatório" autocomplete="off"></div><span></span></li>' +
@@ -661,6 +662,11 @@ async function doTudo(btn) {
     if (extrasDaEmpresa().icmsS) {
       btn.textContent = 'Excel do ICMS…'; await tick();
       if (await saveFile(arquivoICMS(), await buildWorkbookICMS(), { retry: true })) n++;
+      await sleep(400);
+    }
+    if (extrasDaEmpresa().icmsS || extrasDaEmpresa().icmsE) {
+      btn.textContent = 'Excel dos outros pontos…'; await tick();
+      if (await saveFile(arquivoPontos(), await buildWorkbookPontos(), { retry: true })) n++;
       await sleep(400);
     }
     if (extrasDaEmpresa().ecdA) {

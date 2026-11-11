@@ -10,8 +10,13 @@ function quadroResumo() {
     { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)', v: E ? E.pot : null, falta: 'importe a 037' },
     { k: 'j513', t: 'Notas não escrituradas no EFD-Contribuições (Junção 513)', v: j && (j.pis + j.cof) > 0 ? { base: j.base, pis: j.pis, cof: j.cof } : j ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a Junção 513' },
     { k: 'ecd', t: 'Créditos da ECD (diferença ECD x 037)', v: ecd, falta: 'importe a ECD ou informe a base abaixo' },
-    { k: 'icms', t: 'Exclusão do ICMS da base do PIS/COFINS (047)', v: icm ? { base: icm.base, pis: icm.pis, cof: icm.cof } : Sa ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a 047' }
+    { k: 'icms', t: 'Exclusão do ICMS da base do PIS/COFINS (047)', v: icm ? { base: icm.base, pis: icm.pis, cof: icm.cof } : Sa ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a 047', per: icm ? ymFaixa(icm.mi, icm.ma) : '' }
   ];
+  // sem ICMS por item na 047 (transportadora com D200, por exemplo): a comparação mês a mês com a 070
+  const ex = !(Sa && Sa.icms && Sa.icms.comIcms) ? analisarExclusao() : null;
+  if (ex && ex.com047 && ex.n) Object.assign(L[3], { t: 'Exclusão do ICMS da base do PIS/COFINS (070 x 047, por mês)', v: { base: ex.base, pis: ex.pis, cof: ex.cof }, per: ymFaixa(ex.mi, ex.ma) });
+  const an = analisarAnulacoes();
+  if (an) L.push({ k: 'anul', t: 'Crédito não apropriado – anulações 1206/2206 (069)', v: { base: an.base, pis: an.pis, cof: an.cof }, per: an.n ? ymFaixa(an.mi, an.ma) : '' });
   const tot = L.reduce((a, l) => { if (l.v) { a.base += l.v.base; a.pis += l.v.pis; a.cof += l.v.cof; } return a; }, { base: 0, pis: 0, cof: 0 });
   return { L, tot: { base: r2(tot.base), pis: r2(tot.pis), cof: r2(tot.cof) } };
 }
@@ -24,9 +29,10 @@ function viewOutras() {
   if (!j && !ecf && !ecdA && !icS && !X.icmsE && !X.ie0150) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
   if (icS || X.icmsE || X.ie0150) h += cardICMS(icS, X);
   if (ecdA) h += cardECD(ecdA);
+  h += cardPontos(X);
   if (j) h += cardJ513(j);
   if (ecf) h += cardECF(ecf);
-  h += cardQuadro(X);
+  h += cardQuadro(X) + cardQuadroGeral();
   return h;
 }
 
@@ -146,6 +152,7 @@ function cardQuadro(X) {
 function bindOutras() {
   const v = $('#view');
   v.onchange = e => {
+    if (bindPontos(e)) return;
     const s = e.target.closest('select[data-j]');
     if (s) { const j = S.extras.j513, n = j.notas.find(x => x.i === +s.dataset.j); if (!n) return; n.ov = s.value === n.sug.cls ? null : s.value; recalcJ513(j); refreshOutras(); toast('Nota ' + n.num + ': ' + s.value + '.'); return; }
     const ec = e.target.closest('select[data-ecd]');
@@ -163,9 +170,18 @@ function bindOutras() {
     const t = e.target.closest('[data-jt]'); if (t) { S.ui.jt = t.dataset.jt; S.ui.jn = 80; return refreshOutras(); }
     const ea = e.target.closest('[data-ecd-ano]'); if (ea) { const a = +ea.dataset.ecdAno, s = S.extras.ecdA.anosOff; if (s.has(a)) s.delete(a); else s.add(a); analisarECD(S.extras.ecdA); return refreshOutras(); }
     const it = e.target.closest('[data-icms-todos]'); if (it) { S.ui.icmsTodos = it.dataset.icmsTodos === '1'; return refreshOutras(); }
+    const at2 = e.target.closest('[data-an-todas]'); if (at2) { S.ui.anTodas = at2.dataset.anTodas === '1'; return refreshOutras(); }
+    const xt = e.target.closest('[data-ex-todos]'); if (xt) { S.ui.exTodos = xt.dataset.exTodos === '1'; return refreshOutras(); }
     const et = e.target.closest('[data-ecd-todas]'); if (et) { S.ui.ecdTodas = et.dataset.ecdTodas === '1'; return refreshOutras(); }
     const b = e.target.closest('[data-oact]'); if (!b) return;
     if (b.dataset.oact === 'j-mais') { S.ui.jn = (S.ui.jn || 80) + 200; return refreshOutras(); }
+    if (b.dataset.oact === 'an-mais') { S.ui.anN = (S.ui.anN || 60) + 200; return refreshOutras(); }
+    if (b.dataset.oact === 'pontos-xlsx') {
+      b.disabled = true; const lbl = b.innerHTML;
+      try { b.textContent = 'Gerando…'; await saveFile(arquivoPontos(), await buildWorkbookPontos()); }
+      catch (er) { console.error(er); toast('Não foi possível gerar o Excel: ' + er.message, 5000); }
+      b.disabled = false; b.innerHTML = lbl; return;
+    }
     if (b.dataset.oact === 'icms-xlsx') {
       b.disabled = true; const lbl = b.innerHTML;
       try { b.textContent = 'Gerando…'; await saveFile(arquivoICMS(), await buildWorkbookICMS()); }
