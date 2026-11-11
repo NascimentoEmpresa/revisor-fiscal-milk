@@ -55,23 +55,27 @@ function lerICMS(headers, rows, files) {
 
 /* registro 0150 dos SPEDs da EFD ICMS/IPI (.txt): inscrição estadual de cada participante em cada mês */
 function lerSped0150(texto, nome) {
-  let ym = 0, cnpj = '', ehIcms = false, doc = null; const ie = new Map(), aj = [];
+  let ym = 0, cnpj = '', ehIcms = false, doc = null, fin = 0; const ie = new Map(), aj = [], apur = {};
   for (const ln of texto.split(/\r?\n/)) {
     if (ln.startsWith('|0000|')) { const p = ln.split('|'); // EFD ICMS/IPI: |0000|COD_VER|COD_FIN|DT_INI|DT_FIN|NOME|CNPJ|
       ehIcms = /^\d{8}$/.test(p[4] || '') && /^\d{8}$/.test(p[5] || ''); if (!ehIcms) return null;
-      ym = +(p[4].slice(4, 8) + p[4].slice(2, 4)); cnpj = digits(p[7]); continue; }
+      ym = +(p[4].slice(4, 8) + p[4].slice(2, 4)); cnpj = digits(p[7]); fin = +p[3] || 0; continue; }
     if (ln.startsWith('|0150|')) { const p = ln.split('|'), c = digits(p[5] || p[6]); if (c) ie.set(c, String(p[7] || '').trim()); continue; }
     // bloco C: ajustes por documento (C197), para saber se o ICMS de uma devolução foi estornado
     if (ln.startsWith('|C100|')) { const p = ln.split('|'); doc = { part: digits(p[4]), num: String(p[8] || '').replace(/^0+/, ''), ch: p[9] || '' }; continue; }
     if (ln.startsWith('|C197|') && doc) { const p = ln.split('|'); aj.push({ ym, cod: p[2] || '', desc: p[3] || '', vlr: toNum(p[7]) || toNum(p[8]) || 0, part: doc.part, num: doc.num, ch: doc.ch }); continue; }
-    if (/^\|[D-H9]\d{3}\|/.test(ln)) break; // depois do bloco C não interessa
+    // bloco E: ICMS e ICMS-ST a recolher do mês (gráfico da carga tributária do ICMS)
+    if (ln.startsWith('|E110|')) { const p = ln.split('|'); apur.icms = (apur.icms || 0) + toNum(p[13]); continue; }
+    if (ln.startsWith('|E210|')) { const p = ln.split('|'); apur.st = (apur.st || 0) + toNum(p[13]); continue; }
+    if (/^\|[GHK19]\d{3}\|/.test(ln)) break; // depois do bloco E não interessa
   }
-  return ehIcms && ym ? { ym, cnpj, ie, nome, aj } : null;
+  return ehIcms && ym ? { ym, cnpj, ie, nome, aj, apur, fin } : null;
 }
 function guardarSped0150(lst) {
   const m = S.extras.ie0150 || (S.extras.ie0150 = { meses: new Set(), ie: new Map(), files: [] });
   if (!m.aj) m.aj = new Map();
   for (const s of lst) { m.meses.add(s.ym); m.files.push(s.nome); for (const [c, ie] of s.ie) { let x = m.ie.get(c); if (!x) m.ie.set(c, x = new Map()); x.set(s.ym, ie); }
+    if (s.apur && (s.apur.icms != null || s.apur.st != null)) { if (!m.apur) m.apur = new Map(); const o = m.apur.get(s.ym); if (!o || (s.fin || 0) >= (o.fin || 0)) m.apur.set(s.ym, Object.assign({ fin: s.fin || 0 }, s.apur)); } // a retificadora do mesmo mês vale
     for (const a of s.aj || []) m.aj.set(a.ym + '|' + a.cod + '|' + a.vlr + '|' + a.ch + '|' + a.desc, a); } // original e retificadora do mesmo mês: um só
 }
 

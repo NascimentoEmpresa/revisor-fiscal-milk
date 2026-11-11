@@ -184,6 +184,16 @@ function cardPontos(X) {
   return h + '</div></section>';
 }
 
+function cardRetencoes() {
+  const pd = analisarPerdcomp(), rt = analisarRetencoes(); let h = '';
+  if (pd) h += '<section class="card"><div class="card-h"><h2>PER/DCOMP transmitidos</h2><span class="sub">' + pd.L.length + ' PDF</span></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Número</th><th>Transmissão</th><th>Documento · crédito</th><th>Tributo · período</th><th class="n">Crédito original</th></tr></thead><tbody>' +
+    pd.L.map(p => '<tr><td class="mono small">' + esc(p.num) + '</td><td class="mono small">' + esc(p.transm || '—') + '</td><td class="small">' + esc([p.tipoDoc, p.tipoCred].filter(Boolean).join(' · ')) + '</td><td class="small">' + esc([p.tributo, p.pa].filter(Boolean).join(' · ')) + (p.conflito && p.conflito.length ? '<div class="small" style="color:var(--risk)">mesmo período de: ' + esc(p.conflito.join(', ')) + '</div>' : '') + '</td><td class="n">' + (p.valor ? fBRL(p.valor) : '—') + '</td></tr>').join('') + '</tbody></table></div><p class="small muted" style="margin-top:8px">A lista e a conferência com os pontos do diagnóstico vão para o Word.</p></div></section>';
+  if (!rt) return h;
+  return h + ('<section class="card"><div class="card-h"><h2>Retenções na fonte · DIRF x ECF (Y570)</h2></div><div class="card-b"><p class="small" style="margin-top:0">' +
+    (!rt.comY570 ? 'A relação de rendimentos do e-CAC (DIRF) foi lida: ' + fBRL(rt.totDirf) + ' de imposto retido. Importe a ECF Y570 para conferir o que foi escriturado.'
+      : rt.faltam.length ? 'Retenções da DIRF que não estão na ECF: ' + rt.faltam.map(a => '<b>' + a.ano + '</b> ' + fBRL(a.imp)).join(' · ') + ' (total ' + fBRL(rt.tot) + '). O texto vai para o Word.'
+        : 'As retenções da DIRF conferem com as da ECF (' + fNum(rt.nEcf) + ' linhas na Y570).') + '</p></div></section>');
+}
 function cardQuadroGeral() {
   const G = quadroGeral(); if (!G.rec.length && !G.recolher.length) return '';
   const lin = x => '<tr><td class="small">' + x.bloco + '</td><td>' + esc(x.desc) + '</td><td class="mono small">' + esc(x.per) + '</td><td class="n">' + fBRL(x.v) + '</td></tr>';
@@ -258,3 +268,121 @@ async function buildWorkbookPontos(onProgress) {
   return B.build(onProgress);
 }
 const arquivoPontos = () => 'Outros pontos - EFD ICMS x Contribuições - ' + nomeArq() + '.xlsx';
+
+/* ---------- textos do Word: uma seção para cada ponto levantado, no estilo dos diagnósticos da Milk ---------- */
+function blocosDiagnostico() {
+  const X = extrasDaEmpresa(), Sa = resumoDe('SAI'), E = S.empresa.nome || 'a empresa', B = [];
+  const fx = (a, b) => a === b ? ymTxt(a) : ymTxt(a) + ' a ' + ymTxt(b);
+  // ECD
+  const e = X.ecdA;
+  if (e && e.res && e.res.pis + e.res.cof > 0) {
+    const sel = [...e.contas.values()].filter(c => c.despesa && c.valor && clsConta(c) === ECD_CLS.SIM).sort((a, b) => a.desc.localeCompare(b.desc, 'pt-BR'));
+    B.push({ titulo: 'CONTAS IDENTIFICADAS NA ECD PASSÍVEIS DE CREDITAMENTO', pars: [
+      'Na Escrituração Contábil Digital (ECD, registros I200/I250) foram analisadas as contas de despesa dos períodos em que ' + E + ' apurou o PIS e a COFINS no regime não cumulativo (' + e.anosEscopo.join(', ') + '), à luz das hipóteses do art. 3º das Leis 10.637/2002 e 10.833/2003 e dos critérios de essencialidade e relevância (STJ, REsp 1.221.170/PR).',
+      'Dos valores contabilizados nessas contas foram descontadas as bases já utilizadas como crédito na EFD-Contribuições. A diferença, de ' + fBRL(e.res.dif) + ', registrada na ECD mas não refletida na EFD-Contribuições, pode gerar um crédito estimado de ' + fBRL(e.res.pis + e.res.cof) + ' (PIS ' + fBRL(e.res.pis) + ' e COFINS ' + fBRL(e.res.cof) + ').'],
+      tab: { cols: [{ h: 'Conta', w: 3600 }, { h: 'Valor na ECD', w: 1800, right: true }, { h: 'Já utilizado', w: 1800, right: true }, { h: 'Diferença', w: 1800, right: true }],
+        rows: sel.map(c => { const v = c.ajuste != null ? c.ajuste : c.valor; return [c.desc, fBRL(v), fBRL(c.ja), fBRL(v - c.ja)]; }).concat([['Total', fBRL(e.res.valor), fBRL(e.res.ja), fBRL(e.res.dif)]]) },
+      depois: ['O fato de um valor não constar como crédito no EFD-Contribuições não significa que seja recuperável: os documentos de cada conta devem ser conferidos quanto ao enquadramento legal antes do aproveitamento.'] });
+  }
+  // Junção 513
+  const j = X.j513 && X.j513.res;
+  if (j && j.pis + j.cof > 0) B.push({ titulo: 'CRUZAMENTO DA EFD ICMS/IPI COM A EFD-CONTRIBUIÇÕES', pars: [
+    'No cruzamento das notas fiscais escrituradas na EFD ICMS/IPI com as escrituradas na EFD-Contribuições (registros C100/C170), foram identificadas notas de entrada que não constam na EFD-Contribuições e que dão direito a crédito, com base de ' + fBRL(j.base) + ', resultando em crédito de PIS e COFINS de ' + fBRL(j.pis + j.cof) + ' (PIS ' + fBRL(j.pis) + ' e COFINS ' + fBRL(j.cof) + ').'] });
+  // venda de ativo e demais receitas não tributáveis (047)
+  if (Sa && Sa.cats) for (const c of Sa.cats) if (/ativo/i.test(c.cat) && c.pis + c.cof > 0) B.push({ titulo: 'PIS E COFINS SOBRE VENDA DE ATIVO IMOBILIZADO', pars: [
+    'Foram tributadas pelo PIS e pela COFINS operações de venda de bens do ativo imobilizado (' + fx(c.mi, c.ma) + '), receita que não integra a base de cálculo das contribuições (Lei 10.637/2002, art. 1º, § 3º, VI, e Lei 10.833/2003, art. 1º, § 3º, II). O recolhimento indevido soma ' + fBRL(c.pis) + ' de PIS e ' + fBRL(c.cof) + ' de COFINS, passível de restituição ou compensação.'] });
+  // exclusão do ICMS por mês: o texto vai no parágrafo da análise da exclusão (06b)
+  // anulações
+  const an = analisarAnulacoes();
+  if (an && an.n) B.push({ titulo: 'ANULAÇÃO DE PRESTAÇÃO DE SERVIÇO DE TRANSPORTE', pars: [
+    'Foram emitidas anulações de prestação de serviço de transporte (CFOP 1.206/2.206) em ' + fx(an.mi, an.ma) + ', período em que a empresa apurava o PIS e a COFINS no regime não cumulativo, sem o correspondente crédito na EFD-Contribuições. Sobre a base de ' + fBRL(an.base) + ' (valor anulado, descontado o ICMS) cabe o crédito de ' + fBRL(an.pis + an.cof) + ' (PIS ' + fBRL(an.pis) + ' e COFINS ' + fBRL(an.cof) + ').'] });
+  // serviços sem tributação (a recolher)
+  const ss = Sa && Sa.servSemTrib;
+  if (ss && ss.v > 0) B.push({ titulo: 'RECEITAS DE SERVIÇO SEM TRIBUTAÇÃO DE PIS E COFINS', pars: [
+    'Verificou-se a existência de documentos de prestação de serviço registrados nos blocos ' + ss.regs.join(', ') + ' da EFD-Contribuições (' + fx(ss.mi, ss.ma) + ') que compõem o faturamento, mas não tiveram a correspondente tributação de PIS e COFINS (CST 08, 09, 49 ou 99), com base de ' + fBRL(ss.base) + '. O PIS e a COFINS não recolhidos somam ' + fBRL(ss.v) + ' (PIS ' + fBRL(ss.pis) + ' e COFINS ' + fBRL(ss.cof) + '), pela alíquota do regime de cada mês. Recomenda-se verificar a natureza dessas operações e, se tributadas, regularizar o recolhimento.'] });
+  // ICMS: CT-e isentos no RS
+  const ic = X.icmsS && X.icmsS.res;
+  if (ic && ic.icms > 0) {
+    const anos = [...ic.anos].sort((a, b) => a[0] - b[0]);
+    B.push({ titulo: 'ICMS – PRESTAÇÃO DE SERVIÇOS DE TRANSPORTE INTERMUNICIPAL RS', pars: [
+      'Conforme o Decreto 55.371/2020, a contar de 23/07/2020, a prestação de serviço de transporte de cargas que tenha início e término no território do Estado do Rio Grande do Sul é isenta do ICMS quando realizada a contribuinte inscrito no CGC/TE.',
+      'Observou-se que a empresa emitiu CT-e com destaque de ICMS em prestações com início e término no Rio Grande do Sul, para tomadores com inscrição estadual ativa no período, hipótese alcançada pela isenção. Foram identificados ' + fNum(ic.n) + ' CT-e, no montante de ' + fBRL(ic.icms) + ' passível de pedido de restituição ou compensação.',
+      'A efetiva recuperação depende de autorização da Secretaria da Fazenda do Estado do Rio Grande do Sul, que verificará se houve o aproveitamento do crédito pelo tomador do serviço. O valor poderá ser utilizado mediante emissão de nota fiscal de crédito (RICMS/RS, Decreto 37.699/1997, Livro II, art. 26, II), escriturada nos registros C100 e C190 com CFOP 1.949 e situação 08, mantidos à disposição do fisco os CT-e e as consultas das inscrições estaduais dos tomadores.'],
+      tab: { cols: [{ h: 'Ano', w: 1400 }, { h: 'CT-e', w: 1400, right: true }, { h: 'ICMS a recuperar', w: 2200, right: true }, { h: 'Reflexo crédito presumido', w: 2200, right: true }, { h: 'Reflexo PIS/COFINS', w: 2000, right: true }],
+        rows: anos.map(([a, y]) => [String(a), fNum(y.n), fBRL(y.icms), fBRL(y.presum), fBRL(y.pc)]).concat([['Total', fNum(ic.n), fBRL(ic.icms), fBRL(ic.presum), fBRL(ic.pc)]]) },
+      depois: ['A recuperação impactará outros pontos da apuração: ' + (ic.presum > 0 ? 'o crédito presumido de 20% cai junto com o débito (' + fBRL(ic.presum) + ' a estornar); ' : '') + 'o ICMS recuperado deixa de ser excluído da base do PIS e da COFINS (' + fBRL(ic.pc) + ' a recolher). O impacto estimado dessas correções é de ' + fBRL(ic.presum + ic.pc) + ', sujeito à apuração definitiva após as conciliações fiscais e contábeis.'] });
+  }
+  // devoluções de compra com ICMS
+  const dv = analisarDevolucoes();
+  if (dv && dv.n) B.push({ titulo: 'DEVOLUÇÕES DE COMPRA COM DESTAQUE DE ICMS', pars: [
+    'Nas devoluções de compra registradas com os CFOPs ' + anosTexto([...dv.cfops].sort().map(c => c.charAt(0) + '.' + c.slice(1))) + ', o ICMS destacado não foi estornado por ajuste de crédito (registro C197) em ' + fNum(dv.n) + ' notas fiscais, totalizando ' + fBRL(dv.icms) + ' de crédito de ICMS não utilizado.' + (dv.estornado ? ' As demais devoluções com destaque de ICMS tiveram o débito estornado por ajuste (' + fBRL(dv.estornado) + ').' : '')] });
+  // crédito presumido x créditos das entradas
+  const ep = analisarEstornoPresumido();
+  if (ep && ep.icms > 0) B.push({ titulo: 'CRÉDITO PRESUMIDO DE ICMS E CRÉDITOS DAS ENTRADAS', pars: [
+    'No período em que a empresa apurou o ICMS pelo crédito presumido, foram identificados créditos de ICMS decorrentes de aquisições (' + [...ep.docs.reduce((m, d) => { const k = ymTxt(d.ym) + ', CFOP ' + d.cfop.charAt(0) + '.' + d.cfop.slice(1); m.set(k, (m.get(k) || 0) + d.icms); return m; }, new Map())].map(([k, v]) => k + ', ' + fBRL(v)).join('; ') + '), totalizando ' + fBRL(ep.icms) + '.',
+    'Uma vez adotado o regime de crédito presumido, o contribuinte fica impedido de se apropriar de outros créditos de ICMS vinculados às entradas, pois o benefício substitui o sistema ordinário de creditamento. Recomenda-se o estorno desses valores.'] });
+  // PER/DCOMP já transmitidos
+  const pd = analisarPerdcomp();
+  if (pd) B.push({ titulo: 'PER/DCOMP TRANSMITIDOS', pars: [
+    'Foram consultados ' + pd.L.length + ' PER/DCOMP transmitidos pela empresa: ' + pd.L.map(p => 'nº ' + p.num + (p.transm ? ', de ' + p.transm : '') + ' – ' + [p.tipoDoc, p.tipoCred ? 'crédito de ' + p.tipoCred.toLowerCase() : '', p.tributo ? p.tributo + (p.pa ? ' (período de apuração ' + p.pa + ')' : '') : '', p.valor ? 'crédito original de ' + fBRL(p.valor) : ''].filter(Boolean).join(', ')).join('; ') + '.',
+    pd.conflitos.length ? 'Atenção: ' + pd.conflitos.map(p => 'o PER/DCOMP nº ' + p.num + ' utiliza crédito de ' + p.tributo + ' de ' + p.pa + ', período também alcançado por ' + p.conflito.join(' e ')).join('; ') + '. Confirme se o crédito já pedido não é o mesmo levantado neste diagnóstico.'
+      : 'Os pedidos já realizados não se referem aos pontos levantados neste diagnóstico.'] });
+  // retenções na fonte (DIRF x ECF)
+  const rt = analisarRetencoes();
+  if (rt && rt.comY570) B.push({ titulo: 'RETENÇÕES NA FONTE – DIRF x ECF', pars: [rt.faltam.length
+    ? 'No que tange às retenções informadas pelas fontes pagadoras na DIRF, observa-se que parte delas não foi escriturada na ECF (registro Y570): ' + rt.faltam.map(a => a.ano + ', ' + fBRL(a.imp) + ' (' + a.fontes.slice(0, 3).join(', ') + (a.fontes.length > 3 ? ' e outras' : '') + ')').join('; ') + ', totalizando ' + fBRL(rt.tot) + '. Por não constarem da escrituração fiscal, o aproveitamento desses valores dependeria da retificação da ECF; recomenda-se avaliar a conveniência diante do valor envolvido, evitando-se inconsistências ou riscos desnecessários.'
+    : 'As retenções na fonte informadas pelas fontes pagadoras na DIRF (' + anosTexto(rt.anos) + ') conferem com as escrituradas na ECF (registro Y570), não havendo valores retidos a deduzir além dos já considerados.'] });
+  return B;
+}
+
+/* ---------- gráficos do Word, feitos pelo sistema (no lugar das imagens do SistemaMA) ---------- */
+function dadosGraficos() {
+  const X = extrasDaEmpresa(), E = anaENT(), Sa = anaSAI(), M = new Map(), mes = ym => { let m = M.get(ym); if (!m) M.set(ym, m = { fat: 0, comp: 0, pisD: 0, cofD: 0, pisC: 0, cofC: 0, icms: null, st: null }); return m; };
+  if (Sa) for (const r of Sa.recs) { const m = mes(r.ym), c3 = (r.cfop || '').slice(1); if (!CFOP_SAI_SEM_RECEITA.has(c3) && !CFOP_SAI_DEV_COMPRA.has(c3)) m.fat += Math.max(r.vlrItem || 0, r.bcPis || 0); /* F550 e consolidados: a receita vem na base */ m.pisD += r.vlrPis || 0; m.cofD += r.vlrCof || 0; }
+  if (E) for (const r of E.recs) { const m = mes(r.ym), c3 = (r.cfop || '').slice(1); if (!CFOP_SEM_AQUISICAO.has(c3)) m.comp += r.vlrItem || 0; m.pisC += r.vlrPis || 0; m.cofC += r.vlrCof || 0; }
+  const ap = X.ie0150 && X.ie0150.apur; if (ap) for (const [ym, a] of ap) { const m = mes(ym); m.icms = a.icms || 0; m.st = a.st || 0; }
+  const meses = [...M.keys()].sort((a, b) => a - b); if (!meses.length) return null;
+  const v = f => meses.map(ym => r2(f(M.get(ym))));
+  const pis = v(m => Math.max(0, m.pisD - m.pisC)), cof = v(m => Math.max(0, m.cofD - m.cofC)), icms = v(m => m.icms || 0), st = v(m => m.st || 0);
+  return { meses, fat: v(m => m.fat), comp: v(m => m.comp), pis, cof, icms, st, trib: meses.map((_, i) => r2(pis[i] + cof[i] + icms[i] + st[i])), temSai: !!Sa, temEnt: !!E, temIcms: !!ap };
+}
+/* desenho em canvas (PNG) para o Word: barras e linha num eixo só (tudo em R$), legenda, rótulos só nos picos */
+function desenharGrafico(o) {
+  if (typeof document === 'undefined') return null;
+  o.barras = o.barras.filter(b => b.v.some(v => v > 0)); if (!o.barras.length && !(o.linha && o.linha.v.some(v => v > 0))) return null; // série zerada fica fora da legenda
+  const W = 2000, H = 900, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const g = cv.getContext('2d'); if (!g) return null;
+  const COR = ['#2a78d6', '#eb6834', '#1baf7a'], txt = '#0b0b0b', txt2 = '#52514e', grade = '#e6e5e1', n = o.meses.length;
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+  g.fillStyle = txt; g.font = '600 34px Arial, sans-serif'; g.textAlign = 'center'; g.fillText(o.titulo, W / 2, 50);
+  const L = 170, R = W - 40, T = 120, B = H - 150, max = Math.max(1, ...o.barras.flatMap(s => s.v), ...(o.linha ? o.linha.v : []));
+  const passo = (() => { const e = Math.pow(10, Math.floor(Math.log10(max / 5))), c = [1, 2, 2.5, 5, 10].map(k => k * e).find(k => max / k <= 6); return c || e * 10; })(), topo = Math.ceil(max / passo) * passo;
+  const y = v => B - (v / topo) * (B - T), abrev = v => v >= 1e6 ? (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi' : v >= 1e3 ? (v / 1e3).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) + ' mil' : v.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+  g.font = '24px Arial, sans-serif'; g.textAlign = 'right'; g.lineWidth = 1;
+  for (let v = 0; v <= topo + 1e-6; v += passo) { g.strokeStyle = grade; g.beginPath(); g.moveTo(L, y(v)); g.lineTo(R, y(v)); g.stroke(); g.fillStyle = txt2; g.fillText('R$ ' + abrev(v), L - 12, y(v) + 8); }
+  const col = (R - L) / n, nb = o.barras.length, bw = Math.max(2, Math.min(28, (col - 4) / nb - 2));
+  o.barras.forEach((s, k) => { g.fillStyle = COR[k]; s.v.forEach((v, i) => { if (!(v > 0)) return; const x = L + i * col + (col - nb * (bw + 2)) / 2 + k * (bw + 2), yy = y(v); g.beginPath(); if (g.roundRect) g.roundRect(x, yy, bw, B - yy, [Math.min(4, bw / 2), Math.min(4, bw / 2), 0, 0]); else g.rect(x, yy, bw, B - yy); g.fill(); }); });
+  if (o.linha) { g.strokeStyle = COR[nb]; g.lineWidth = 4; g.beginPath(); o.linha.v.forEach((v, i) => { const x = L + i * col + col / 2; i ? g.lineTo(x, y(v)) : g.moveTo(x, y(v)); }); g.stroke(); }
+  // rótulos: só o maior valor de cada série
+  g.font = '600 22px Arial, sans-serif'; g.textAlign = 'center'; g.fillStyle = txt;
+  for (const [k, s] of o.barras.concat(o.linha ? [o.linha] : []).entries()) { const i = s.v.indexOf(Math.max(...s.v)); if (s.v[i] > 0) g.fillText('R$ ' + abrev(s.v[i]), L + i * col + col / 2, y(s.v[i]) - 12 - k * 24); }
+  // meses
+  g.fillStyle = txt2; g.font = '20px Arial, sans-serif'; const cada = Math.max(1, Math.ceil(n / 30));
+  o.meses.forEach((ym, i) => { if (i % cada) return; g.save(); g.translate(L + i * col + col / 2, B + 14); g.rotate(-Math.PI / 3); g.textAlign = 'right'; g.fillText(ymTxt(ym), 0, 8); g.restore(); });
+  g.strokeStyle = txt2; g.lineWidth = 2; g.beginPath(); g.moveTo(L, B); g.lineTo(R, B); g.stroke();
+  // legenda
+  const itens = o.barras.map((s, k) => [s.nome, COR[k], 'b']).concat(o.linha ? [[o.linha.nome, COR[nb], 'l']] : []);
+  g.font = '24px Arial, sans-serif'; g.textAlign = 'left'; let lx = L; const ly = 90;
+  for (const [nm, c, t] of itens) { g.fillStyle = c; if (t === 'b') g.fillRect(lx, ly - 18, 22, 22); else g.fillRect(lx, ly - 9, 30, 5); g.fillStyle = txt; g.fillText(nm, lx + 36, ly); lx += 60 + g.measureText(nm).width; }
+  if (o.nota) { g.fillStyle = txt2; g.font = 'italic 20px Arial, sans-serif'; g.textAlign = 'left'; g.fillText(o.nota, L, H - 18); }
+  const b64 = cv.toDataURL('image/png').split(',')[1], bin = atob(b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return { png: u8, w: W, h: H };
+}
+function graficosWord() {
+  const d = dadosGraficos(); if (!d || typeof document === 'undefined') return {};
+  const G = {};
+  if (d.temSai || d.temEnt) G.grafEvol = desenharGrafico({ titulo: 'Evolução da Carga Tributária - Mensal', meses: d.meses, barras: [d.temSai ? { nome: 'Faturamento', v: d.fat } : null, d.temEnt ? { nome: 'Compras', v: d.comp } : null].filter(Boolean), linha: { nome: 'Tributos', v: d.trib }, nota: 'Fonte: EFD-Contribuições (037/047)' + (d.temIcms ? ' e EFD ICMS/IPI (E110/E210)' : '') + '. Tributos = PIS e COFINS (débitos menos créditos)' + (d.temIcms ? ' + ICMS e ICMS-ST a recolher.' : '.') });
+  if (d.temSai) G.grafPC = desenharGrafico({ titulo: 'PIS/COFINS a recolher - Mensal', meses: d.meses, barras: [{ nome: 'PIS/PASEP', v: d.pis }, { nome: 'COFINS', v: d.cof }], nota: 'Débitos da 047 menos créditos da 037, por mês' + (d.temEnt ? '.' : ' (sem a 037, só os débitos).') });
+  if (d.temIcms) G.grafICMS = desenharGrafico({ titulo: 'ICMS e ICMS-ST a recolher - Mensal', meses: d.meses, barras: [{ nome: 'ICMS', v: d.icms }, { nome: 'ICMS-ST', v: d.st }], nota: 'Fonte: SPED EFD ICMS/IPI, registros E110 e E210.' });
+  for (const k of Object.keys(G)) if (!G[k]) delete G[k];
+  return G;
+}

@@ -144,9 +144,23 @@ async function preencherModelo(bytes, d) {
   const totalGeral = r2(linhas.reduce((a, l) => a + l.pis + l.cof, 0));
   const comGeral = !!(d.geral && (d.geral.rec.some(x => x.bloco !== 'PIS/COFINS') || d.geral.recolher.length)), totConcl = comGeral ? d.geral.totRec : totalGeral; // com ICMS no quadro geral, a conclusão fala do total a recuperar
 
-  const temRegime = !!(R.ENT || R.SAI);
+  const temRegime = !!(R.ENT || R.SAI), novasImg = [];
+  // modelos de título e de corpo do próprio documento, para as seções geradas
+  const achaP = re => { const k = textos.findIndex(t => re.test(t.trim())); return k >= 0 ? doc.slice(ps[k].a, ps[k].b) : null; };
+  const tplTit = achaP(/^LAN[ÇC]AMENTOS SEM CR[ÉE]DITO$/i) || achaP(/^CONCLUS[ÃA]O$/i), tplCorpo = achaP(/^Atrav[ée]s da EFD Contribui/i) || achaP(/^Inicialmente, com no cruzamento/i);
+  const semAmarelo = x => x.replace(/<w:highlight w:val="[^"]*"\/>/g, '');
+  const blocosXml = (d.blocos || []).length && tplTit && tplCorpo ? d.blocos.map(b => {
+    const corpo = t => semAmarelo(DX.setText(tplCorpo, t)), vazio = '<w:p>' + DX.pPr(tplCorpo) + '</w:p>';
+    return vazio + semAmarelo(DX.setText(tplTit, b.titulo)) + b.pars.map(corpo).join('') + (b.tab ? dxTabela(b.tab.cols, b.tab.rows, { totalLast: true }) + vazio : '') + (b.depois || []).map(corpo).join('');
+  }).join('') : '';
+  // empresa de serviço (quase sem venda de mercadoria na 047): as seções do ICMS-ST não se aplicam
+  const servico = R.SAI && R.SAI.mercPct != null && R.SAI.mercPct < 0.02;
+  const iST = servico ? textos.findIndex(t => /^EXCLUS[ÃA]O DO ICMS ST DA BASE/i.test(t.trim())) : -1, iST2 = iST >= 0 ? textos.findIndex((t, k) => k > iST && /^LAN[ÇC]AMENTOS SEM CR[ÉE]DITO$/i.test(t.trim())) : -1;
+  if (iST >= 0 && iST2 > iST) relat.feitos.push('Seções do ICMS-ST retiradas (empresa de serviço, sem venda de mercadorias na 047)');
   for (let i = ps.length - 1; i >= 0; i--) {
     const pp = ps[i]; let p = doc.slice(pp.a, pp.b); const t0 = textos[i]; let q, ok = false; // ok = trecho preenchido e conferido pelo sistema: sai do amarelo
+    if (iST >= 0 && i >= iST && i < iST2) { doc = doc.slice(0, pp.a) + doc.slice(pp.b); continue; }
+    if (blocosXml && /^\s*OBSERVA[ÇC][ÕO]ES:\s*$/i.test(t0)) { doc = doc.slice(0, pp.a) + blocosXml + doc.slice(pp.a); relat.feitos.push('Seções dos pontos levantados: ' + d.blocos.map(b => b.titulo.toLowerCase()).join('; ')); continue; }
     // nome e CNPJ em todo o documento
     if (nomeAnt && nome && t0.includes(nomeAnt)) { p = DX.replaceAll(p, nomeAnt, nome); if (t0.length < 90 && /^\s*(EMPRESA:|[ÀÁ]\s)/i.test(t0)) ok = true; }
     if (cnpjAnt && cnpj && t0.includes(cnpjAnt)) { p = DX.replaceAll(p, cnpjAnt, cnpj); if (t0.length < 40) ok = true; }
@@ -186,7 +200,13 @@ async function preencherModelo(bytes, d) {
       } else { p = DX.setText(p, 'No período analisado, não foram identificadas vendas tributadas de produtos sujeitos à alíquota zero ou à incidência monofásica.'); ok = true; relat.feitos.push('Produtos de alíquota zero'); }
     }
     // ICMS na base dos débitos (047)
-    if (R.SAI && R.SAI.icms && /exclus[ãa]o do ICMS da Base de C[áa]lculo do PIS e COFINS/i.test(DX.text(p)) && /levantamento apontou|j[áa] utiliza a exclus[ãa]o/i.test(DX.text(p))) {
+    if (R.SAI && R.SAI.icms && !R.SAI.icms.comIcms && /exclus[ãa]o do ICMS da Base de C[áa]lculo do PIS e COFINS/i.test(DX.text(p)) && /levantamento apontou|j[áa] utiliza a exclus[ãa]o/i.test(DX.text(p))) {
+      const quem = 'A empresa ' + (nome || 'EMPRESA') + (regAtualTxt ? ', atualmente tributada pelo ' + regAtualTxt + ',' : ''), m = d.exclMes;
+      if (m && m.n) { p = DX.setText(p, quem + ' não excluiu o ICMS destacado da base de cálculo do PIS e da COFINS no período de ' + ymL(m.mi) + ' a ' + ymL(m.ma) + ': o ICMS de ' + fBRL(m.icms) + ' permaneceu na base, o que resultou no pagamento a maior de ' + fBRL(m.v) + ' de PIS e COFINS, pela alíquota do regime de cada mês, passível de recuperação. Nos demais meses, a exclusão já foi feita.'); relat.feitos.push('Exclusão do ICMS da base (070 x 047, mês a mês)'); ok = true; }
+      else if (m) { p = DX.setText(p, quem + ' já utiliza a exclusão do ICMS da Base de Cálculo do PIS e COFINS em todo o período analisado, conforme o cruzamento mensal da EFD ICMS/IPI com a EFD-Contribuições, não havendo valores a recuperar.'); relat.feitos.push('Exclusão do ICMS da base (070 x 047, mês a mês)'); ok = true; }
+      else { p = DX.setText(p, quem + ': [A 047 não traz o ICMS por item. Importe a 070 (saídas) da EFD ICMS/IPI para o Revisor conferir a exclusão do ICMS mês a mês.]'); relat.pendentes.push('Exclusão do ICMS: importar a 070 para conferir (a 047 não traz o ICMS por item)'); }
+    }
+    else if (R.SAI && R.SAI.icms && /exclus[ãa]o do ICMS da Base de C[áa]lculo do PIS e COFINS/i.test(DX.text(p)) && /levantamento apontou|j[áa] utiliza a exclus[ãa]o/i.test(DX.text(p))) {
       const ic = R.SAI.icms, per = ymL(R.SAI.ini) + ' a ' + ymL(R.SAI.fim), quem = 'A empresa ' + (nome || 'EMPRESA') + (regAtualTxt ? ' atualmente tributada pelo ' + regAtualTxt : '');
       const txt = ic.n && !ic.residual
         ? quem + (ic.first ? ' já utiliza a exclusão do ICMS da Base de Cálculo do PIS e COFINS a partir da competência ' + ymL(ic.first) + ', no entanto, o levantamento apontou ' : ' não utiliza a exclusão do ICMS da Base de Cálculo do PIS e COFINS, e o levantamento apontou ') + fBRL(ic.v) + ' de PIS e COFINS pagos sobre valores de ICMS ainda não descontados da base de cálculo no período analisado de ' + ymL(ic.mi) + ' a ' + ymL(ic.ma) + '.'
@@ -194,6 +214,7 @@ async function preencherModelo(bytes, d) {
       p = DX.setText(p, txt); relat.feitos.push('Exclusão do ICMS da base (saídas)'); ok = true;
     }
     // ICMS na base do crédito (037)
+    if (R.ENT && R.ENT.fim < 202305 && /ICMS da base de c[áa]lculo do cr[ée]dito/i.test(DX.text(p))) { doc = doc.slice(0, pp.a) + doc.slice(pp.b); relat.feitos.push('ICMS na base do crédito: parágrafo retirado (a 037 termina antes de 05/2023)'); continue; }
     if (R.ENT && R.ENT.icmsCred && /ICMS da base de c[áa]lculo do cr[ée]dito/i.test(DX.text(p))) {
       const v = R.ENT.icmsCred.v;
       p = v > 0 ? (DX.replaceRe(p, /(cr[ée]dito indevido no valor de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(v)) || p)
@@ -201,10 +222,14 @@ async function preencherModelo(bytes, d) {
       relat.feitos.push('ICMS na base do crédito (entradas)'); ok = true;
     }
     // lançamentos sem crédito (037)
-    if (R.ENT && (q = DX.replaceRe(p, /(montante total a recuperar equivalente a )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(R.ENT.pot.pis + R.ENT.pot.cof)))) { p = q; relat.feitos.push('Total das notas lançadas sem crédito'); ok = true; }
+    const potE = R.ENT ? (d.entQ ? d.entQ.pis + d.entQ.cof : R.ENT.pot.pis + R.ENT.pot.cof) : 0;
+    if (R.ENT && !(potE > 0) && /^\s*Atrav[ée]s da EFD Contribui[çc][õo]es das apura[çc][õo]es/i.test(DX.text(p))) { p = DX.setText(p, 'Através da EFD-Contribuições das apurações do período analisado, verificamos as Notas Fiscais de entrada escrituradas sem o crédito de PIS e COFINS.'); ok = true; }
+    if (R.ENT && !(potE > 0) && /montante total a recuperar equivalente a/i.test(DX.text(p))) { p = DX.setText(p, 'O cruzamento não identificou notas fiscais lançadas sem a apropriação de créditos que dessem direito ao aproveitamento' + (d.ecd ? '; as despesas sem crédito foram consideradas no cruzamento com a ECD, apresentado a seguir.' : '.')); relat.feitos.push('Notas lançadas sem crédito: nenhuma com direito ao crédito'); ok = true; }
+    else if (R.ENT && (q = DX.replaceRe(p, /(montante total a recuperar equivalente a )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(potE)))) { p = q; relat.feitos.push('Total das notas lançadas sem crédito'); ok = true; }
     if (R.ENT && /aproveitamento incorreto de PIS e COFINS/i.test(DX.text(p)) && /uso e consumo/i.test(DX.text(p))) {
-      p = R.ENT.usoConsumo > 0 ? (DX.replaceRe(p, /(no valor total de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(R.ENT.usoConsumo)) || p) : DX.setText(p, 'Não foi verificado aproveitamento incorreto de PIS e COFINS referente a produtos adquiridos para uso e consumo.');
-      relat.feitos.push('Crédito indevido em uso e consumo'); ok = true;
+      if (R.ENT.usoConsumo > 0) { p = DX.replaceRe(p, /(no valor total de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(R.ENT.usoConsumo)) || p; relat.pendentes.push('Crédito em uso e consumo (' + fBRL(R.ENT.usoConsumo) + '): confirmar se é indevido; em indústria e transporte pode ser insumo'); }
+      else { p = DX.setText(p, 'Não foi verificado aproveitamento incorreto de PIS e COFINS referente a produtos adquiridos para uso e consumo.'); ok = true; }
+      relat.feitos.push('Crédito em uso e consumo');
     }
     // total da conclusão
     if (linhas.length && (q = DX.replaceRe(p, /(identifica[çc][ãa]o do montante de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(totConcl)))) { p = q; relat.feitos.push('Total da conclusão' + (comGeral ? ' (total a recuperar do quadro geral)' : '')); ok = true; }
@@ -213,7 +238,12 @@ async function preencherModelo(bytes, d) {
     // imagens
     if (!p) { doc = doc.slice(0, pp.a) + doc.slice(pp.b); continue; }
     const semImg = (rot) => '<w:p>' + DX.pPr(p) + DX.hlRun('[' + rot + ']', DX.rPr(p)) + '</w:p>';
-    if (i === imgDepois.get('grafEvol')) { p = semImg('Colar aqui o gráfico "Evolução da Carga Tributária" do SistemaMA desta empresa'); relat.pendentes.push('Gráfico Evolução da Carga Tributária (SistemaMA)'); }
+    const grafico = k => { const gq = d.graficos && d.graficos[k]; if (!gq) return false;
+      const id = 'rIdRF' + k; p = p.replace(/r:embed="[^"]+"/, 'r:embed="' + id + '"').replace(/<wp:extent cx="(\d+)" cy="(\d+)"\/>/, (m, cx) => '<wp:extent cx="' + cx + '" cy="' + Math.round(+cx * gq.h / gq.w) + '"/>').replace(/<a:ext cx="(\d+)" cy="(\d+)"\/>/, (m, cx) => '<a:ext cx="' + cx + '" cy="' + Math.round(+cx * gq.h / gq.w) + '"/>');
+      files['word/media/rf_' + k + '.png'] = gq.png; novasImg.push([id, 'media/rf_' + k + '.png']); return true; };
+    if (i === imgDepois.get('grafEvol')) { if (grafico('grafEvol')) relat.feitos.push('Gráfico Evolução da Carga Tributária (gerado pelo sistema)'); else { p = semImg('Colar aqui o gráfico "Evolução da Carga Tributária" do SistemaMA desta empresa'); relat.pendentes.push('Gráfico Evolução da Carga Tributária (SistemaMA)'); } }
+    else if (i === imgDepois.get('grafPC') && grafico('grafPC')) relat.feitos.push('Gráfico Carga Tributária PIS e COFINS (gerado pelo sistema)');
+    else if (i === imgDepois.get('grafICMS') && grafico('grafICMS')) relat.feitos.push('Gráfico Carga Tributária ICMS (gerado pelo sistema, SPED E110/E210)');
     else if (i === imgDepois.get('grafPC')) { p = semImg('Colar aqui o gráfico "Carga Tributária PIS e COFINS" do SistemaMA desta empresa'); relat.pendentes.push('Gráfico Carga Tributária PIS e COFINS (SistemaMA)'); }
     else if (i === imgDepois.get('grafICMS')) { p = semImg('Colar aqui o gráfico "Carga Tributária ICMS" do SistemaMA desta empresa'); relat.pendentes.push('Gráfico Carga Tributária ICMS (SistemaMA)'); }
     else if (i === imgDepois.get('ncms')) {
@@ -224,7 +254,8 @@ async function preencherModelo(bytes, d) {
         rows.push(['Total', '', fNum(R.ENT.ncms.reduce((a, x) => a + x.n, 0)), fBRL(R.ENT.pot.pis + R.ENT.pot.cof)]);
         p = dxTabela([{ h: 'NCM', w: 1300 }, { h: 'Produto', w: 4700 }, { h: 'Itens', w: 900, right: true }, { h: 'PIS + COFINS', w: 2000, right: true }], rows, { totalLast: true }) + '<w:p>' + DX.pPr(p) + '</w:p>';
         relat.feitos.push('Lista dos NCM com crédito');
-      } else { p = semImg('Inserir a relação dos NCM com crédito'); relat.pendentes.push('Relação dos NCM com crédito (falta a planilha 037)'); }
+      } else if (R.ENT) p = ''; // nenhum NCM com crédito: sem a lista
+      else { p = semImg('Inserir a relação dos NCM com crédito'); relat.pendentes.push('Relação dos NCM com crédito (falta a planilha 037)'); }
     }
     else if (i === imgDepois.get('resumo')) {
       const rows = linhas.map(l => [l.t, fBRL(l.base), fBRL(l.pis), fBRL(l.cof), fBRL(l.pis + l.cof)]);
@@ -270,6 +301,7 @@ async function preencherModelo(bytes, d) {
   // 4. relações: logotipo novo e remoção das imagens antigas que deixaram de ser usadas (não fica dado da outra empresa no arquivo)
   let rels = rd('word/_rels/document.xml.rels');
   if (rels) {
+    for (const [id, tg] of novasImg) rels = rels.replace('</Relationships>', '<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="' + tg + '"/></Relationships>');
     if (d.logoCliente && capaLogo >= 0) rels = rels.replace('</Relationships>', '<Relationship Id="rIdRFlogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/rf_logo_cliente.png"/></Relationships>');
     const usados = new Set((doc.match(/r:(?:embed|id|link|pict)="([^"]+)"/g) || []).map(s => s.replace(/^.*="|"$/g, '')));
     rels = rels.replace(/<Relationship\b[^>]*\/>/g, tag => {
@@ -311,6 +343,6 @@ const modeloBytes = () => (S.modelo && S.modelo.bytes) || modeloPadrao();
 function dadosModelo() {
   const X = extrasDaEmpresa(), Q = quadroResumo();
   return { nome: S.empresa.nome, cnpj: S.empresa.cnpj, cidade: S.settings.cidade, ent: resumoDe('ENT'), sai: resumoDe('SAI'), logoCliente: S.logoCliente || null,
-    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, geral: quadroGeral(), entQ: (l => l && l.v)(Q.L.find(l => l.k === 'ent')),
-    excl: (l => l && l.v && /070 x 047/.test(l.t) && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'icms')), anul: (l => l && l.v && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'anul')), ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
+    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, geral: quadroGeral(), blocos: blocosDiagnostico(), graficos: graficosWord(), entQ: (l => l && l.v)(Q.L.find(l => l.k === 'ent')),
+    excl: (l => l && l.v && /070 x 047/.test(l.t) && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'icms')), exclMes: (() => { const r = analisarExclusao(); return r && r.com047 ? { n: r.n, icms: r.icms, v: r2(r.pis + r.cof), mi: r.mi, ma: r.ma, v925: r.v925, meses: r.meses.length } : null; })(), anul: (l => l && l.v && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'anul')), ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
 }

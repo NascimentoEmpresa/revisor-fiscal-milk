@@ -578,6 +578,7 @@ function buildResumo() {
     R.zeroNcms = [...zm.values()].sort((a, b) => b.v - a.v);
     R.icms = S.icmsSai || null;
     R.servSemTrib = S.servSemTrib || null;
+    { let tot = 0, merc = 0; for (const r of S.recs) { tot += r.vlrItem || 0; if (r.ncm && /^C1/i.test(r.registro) && !/^\d55[0-9]$/.test(r.cfop || '')) merc += r.vlrItem || 0; } R.mercPct = tot ? merc / tot : 0; } // vendas de mercadoria (o resto é serviço)
   }
   return R;
 }

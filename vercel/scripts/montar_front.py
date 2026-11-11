@@ -11,6 +11,11 @@ pag = lambda titulo, cabeca, corpo: '<!doctype html>\n<html lang="pt-BR"><head><
 
 # 1) sistema: a versão offline (bibliotecas embutidas, nada de CDN) com o modo servidor ligado
 off = ler('dist/Revisor Fiscal - offline.html')
+# o leitor de PDF não vai embutido no servidor (1,5 MB a cada abertura): fica em /vendor/ e só baixa quando um PDF é importado
+off = re.sub(r'<script type="text/plain" id="rf-pdfjs(?:-worker)?">.*?</script>\n', '', off, flags=re.S)
+import shutil
+os.makedirs(os.path.join(RAIZ, 'public', 'vendor'), exist_ok=True)
+for n in ('pdf.min.js', 'pdf.worker.min.js'): shutil.copy(os.path.join(APP, 'vendor', 'pdfjs-3.11.174', n), os.path.join(RAIZ, 'public', 'vendor', n))
 pub('index.html', pag('Revisor Fiscal', '<script>window.RF_SERVIDOR=true</script>', off))
 
 # 2) login: a mesma abertura (símbolo da Milk + e-mail e senha), conferindo no servidor

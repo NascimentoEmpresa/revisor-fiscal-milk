@@ -27,7 +27,10 @@ open(os.path.join(ROOT, 'dist/revisor-fiscal.html'), 'w', encoding='utf-8').writ
 offline = ('<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n'
            + head + '\n</head>\n<body>\n' + body
            + '\n<script>\n' + vendor('vendor/xlsx-0.18.5/package/dist/xlsx.full.min.js') + '\n</script>\n<script>\n'
-           + vendor('vendor/fflate-0.8.2/package/umd/index.js') + '\n</script>\n' + app + '</body>\n</html>\n')
+           + vendor('vendor/fflate-0.8.2/package/umd/index.js') + '\n</script>\n'
+           # leitor de PDF (PER/DCOMP): só é executado quando um PDF é importado; no servidor vem de /vendor/
+           + '<script type="text/plain" id="rf-pdfjs-worker">' + vendor('vendor/pdfjs-3.11.174/pdf.worker.min.js') + '</script>\n'
+           + '<script type="text/plain" id="rf-pdfjs">' + vendor('vendor/pdfjs-3.11.174/pdf.min.js') + '</script>\n' + app + '</body>\n</html>\n')
 open(os.path.join(ROOT, 'dist/Revisor Fiscal - offline.html'), 'w', encoding='utf-8').write(offline)
 for f in ('dist/revisor-fiscal.html', 'dist/Revisor Fiscal - offline.html'):
     print(f, round(os.path.getsize(os.path.join(ROOT, f)) / 1024), 'KB')

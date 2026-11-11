@@ -46,10 +46,10 @@ function viewOutras() {
   let h = '<div class="phead"><div><span class="band">Etapa 5 · Outras planilhas</span><h1>Planilhas <em>complementares</em> do SistemaMA</h1>' +
     '<p>A <b>ECD</b> (I200/I250) mostra as despesas contabilizadas que podem dar crédito e não foram aproveitadas na 037. A <b>Junção 513</b> (EFD ICMS/IPI + EFD-Contribuições, C100/C170) mostra as notas que estão no SPED ICMS e não no SPED Contribuições. A <b>070</b> da EFD ICMS/IPI, com os SPEDs (.txt, registro 0150), mostra o ICMS de CT-e em transporte isento dentro do RS. A <b>ECF 0000/0010</b> traz a forma de tributação e de apuração de cada ano.</p></div>' +
     '<div class="toolbar"><button class="btn" data-act="pick" type="button">Importar planilhas</button></div></div>';
-  if (!j && !ecf && !ecdA && !icS && !X.icmsE && !X.ie0150) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
+  if (!j && !ecf && !ecdA && !icS && !X.icmsE && !X.ie0150 && !X.ret && !X.perdcomp) h += '<section class="card"><div class="card-b"><p>Nenhuma planilha complementar importada. Na etapa Importar, solte a <b>Junção 513</b> ("Junções - EFD-ICMS-IPI + EFD-Contribuições - 513 - C100, C170 - Todos os Documentos e CFOP - Resumido") e a <b>ECF 0000/0010</b> junto com a 037 e a 047, ou depois delas.</p></div></section>';
   if (icS || X.icmsE || X.ie0150) h += cardICMS(icS, X);
   if (ecdA) h += cardECD(ecdA);
-  h += cardPontos(X);
+  h += cardPontos(X) + cardRetencoes();
   if (j) h += cardJ513(j);
   if (ecf) h += cardECF(ecf);
   h += cardQuadro(X) + cardQuadroGeral();

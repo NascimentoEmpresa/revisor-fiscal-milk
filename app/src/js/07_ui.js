@@ -61,7 +61,7 @@ function renderChrome() {
 
 function go(view) {
   // sem planilha importada, as outras etapas abrem com a demonstração (dados fictícios), para dar para conhecer todas as telas
-  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf || S.extras.ecdA || S.extras.icmsS || S.extras.icmsE || S.extras.ie0150))) {
+  if (!S.loaded && view !== 'importar' && !(view === 'outras' && (S.extras.j513 || S.extras.ecf || S.extras.ecdA || S.extras.icmsS || S.extras.icmsE || S.extras.ie0150 || S.extras.ret || S.extras.perdcomp))) {
     S.ui.aposImport = view;
     if (!busy) { toast('Nenhuma planilha importada: abrindo a demonstração com dados fictícios.', 3500); process({ demo: 'AMBAS' }); }
     return;
@@ -152,6 +152,11 @@ async function lerArquivos(files, onStep, onFile) {
   for (let k = 0; k < files.length; k++) {
     const f = files[k], pre = files.length > 1 ? 'Arquivo ' + (k + 1) + ' de ' + files.length + ' · ' : '';
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
+    if (/\.pdf$/i.test(f.name || '')) { // PER/DCOMP do e-CAC
+      let pd = null; try { pd = lerPerdcomp(await pdfLinhas(f), f.name); } catch (e) { console.warn('PDF', f.name, e); }
+      if (pd) { extras.push({ tipo: 'PERDCOMP', dados: pd }); if (onFile) onFile(k, 'PERDCOMP'); } else ignorados.push(f.name);
+      continue;
+    }
     if (/\.txt$/i.test(f.name || '')) { // SPED da EFD ICMS/IPI: só o registro 0150 (inscrição estadual dos participantes)
       const s = lerSped0150(await f.text(), f.name);
       if (s) { speds.push(s); if (onFile) onFile(k, 'SPED'); } else ignorados.push(f.name);
@@ -162,7 +167,7 @@ async function lerArquivos(files, onStep, onFile) {
     if (vistos.has(fp)) { repetidos.push(f.name + ' (igual a ' + vistos.get(fp) + ')'); if (onFile) onFile(k, 'REPETIDO'); continue; }
     vistos.set(fp, f.name);
     const tx = tipoExtra(wb.headers.map(normKey));
-    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : tx === 'ICMS' ? lerICMS(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
+    if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : tx === 'ICMS' ? lerICMS(wb.headers, wb.rows, [f.name]) : tx === 'Y570' ? lerY570(wb.headers, wb.rows, [f.name]) : tx === 'DIRF' ? lerDIRF(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
     if (M.missing.length) throw new Error('"' + f.name + '": não encontrei as colunas ' + M.missing.map(x => FIELDS[x].names[0].toUpperCase()).join(', ') + '. Confira se é a consulta "EFD - Contribuições - 037 - Entradas" ou "047 - Saídas", Todos os Registros - Completo.');
     const tipo = detectTipo(M.hk, wb.rows, M.map), sig = M.hk.join('|');
@@ -200,7 +205,7 @@ function trocarEmpresaSeOutra(c) {
   if (!S.demo && atual === c) return;
   if (S.loaded || S.demo || (atual && atual !== c)) {
     S.analyses = {}; S.loaded = false; S.demo = false;
-    S.extras = { cnpj: c, j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null };
+    S.extras = { cnpj: c, j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null, ret: null, perdcomp: null };
     S.empresa = { nome: store.get(NOMES_KEY, {})[c] || '', cnpj: c };
     if (atual && atual !== c) toast('Outra empresa (CNPJ ' + fmtCNPJ(c) + '): a análise anterior foi fechada.', 4500);
   }
@@ -255,7 +260,7 @@ async function process(input) {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); lidosCnpj = lidos.cnpj || ''; extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); lidosCnpj = lidos.cnpj || ''; extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) ignorado(s): não são SPED da EFD ICMS/IPI nem PER/DCOMP (' + lidos.ignorados.slice(0, 3).join(', ') + ').', 6000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
     if (!input.demo) trocarEmpresaSeOutra(lidosCnpj);
     for (let k = 0; k < jobs.length; k++) {

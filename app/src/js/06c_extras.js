@@ -15,9 +15,11 @@ function tipoExtra(hk) {
   if (hk.includes('forma tributacao') && hk.includes('forma apuracao') && hk.includes('periodo inicial')) return 'ECF';
   if (hk.includes('vlr partida') && hk.includes('d c') && hk.includes('tipo lancamento') && hk.includes('conta')) return 'ECD';
   if (hk.includes('cst icms') && hk.includes('indicador emitente') && hk.includes('uf origem destino') && hk.includes('vlr icms')) return 'ICMS';
+  if (hk.includes('cnpj fonte pagadora') && hk.includes('vlr ir retido fonte')) return 'Y570';
+  if (hk.includes('cnpj fonte pagadora') && hk.includes('vlr imposto retido') && hk.includes('ano calendario')) return 'DIRF';
   return null;
 }
-const EXTRA_NOME = { REPETIDO: 'Repetido: lido uma vez só', J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
+const EXTRA_NOME = { REPETIDO: 'Repetido: lido uma vez só', PERDCOMP: 'PER/DCOMP (PDF do e-CAC)', Y570: 'ECF Y570 · IR e CSLL retidos na fonte', DIRF: 'e-CAC · Rendimentos e imposto retido (DIRF)', J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
 
 /* ano-mês (aaaamm) de uma data em texto dd/mm/aaaa, Date ou número de série do Excel */
 function ymDe(v) {
@@ -181,16 +183,18 @@ const tribAtualECF = ecf => ecf && ecf.anos.length ? ecf.anos[ecf.anos.length - 
 /* ---------- guarda junto da empresa ---------- */
 function guardarExtra(tipo, dados) {
   const c = digits(dados.cnpj || '');
-  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
+  if (S.extras.cnpj && c && c !== S.extras.cnpj) S.extras = { cnpj: c, j513: null, ecf: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null, ret: null, perdcomp: null, ecd: S.extras.ecd && S.extras.ecd.cnpj === c ? S.extras.ecd : null };
   if (!S.extras.cnpj) S.extras.cnpj = c;
   if (tipo === 'J513') S.extras.j513 = analisarJ513(dados);
   if (tipo === 'ECF') { S.extras.ecf = dados; if (S.extras.ecdA) analisarECD(S.extras.ecdA); }
   if (tipo === 'ECD') S.extras.ecdA = analisarECD(dados);
   if (tipo === 'ICMS') { if (dados.tipo === 'S') S.extras.icmsS = analisarICMS(Object.assign(dados, { corte: dados.corte || (S.extras.icmsS ? S.extras.icmsS.corte : null) })); else S.extras.icmsE = dados; }
   if (tipo === 'ECF' && S.extras.icmsS) analisarICMS(S.extras.icmsS);
+  if (tipo === 'PERDCOMP') { const L = S.extras.perdcomp || (S.extras.perdcomp = []); if (!L.some(x => x.num === dados.num)) L.push(dados); L.sort((a, b) => (a.ymT || 0) - (b.ymT || 0)); }
+  if (tipo === 'Y570' || tipo === 'DIRF') { const r = S.extras.ret || (S.extras.ret = { y570: null, dirf: null }); r[tipo === 'Y570' ? 'y570' : 'dirf'] = dados; }
 }
 /* complementares só valem para a empresa que está na tela */
-const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null };
+const extrasDaEmpresa = () => !S.extras.cnpj || !S.empresa.cnpj || digits(S.empresa.cnpj) === S.extras.cnpj ? S.extras : { j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null, ret: null, perdcomp: null };
 
 /* ---------- Excel da Junção 513 ---------- */
 async function buildWorkbookJ513(onProgress) {
@@ -261,3 +265,68 @@ async function buildWorkbookJ513(onProgress) {
   return B.build(onProgress);
 }
 const arquivoJ513 = () => 'Junção 513 - Notas não escrituradas - ' + nomeArq() + '.xlsx';
+
+/* ---------- retenções na fonte: ECF Y570 (o que a empresa escriturou) x e-CAC / DIRF (o que as fontes pagadoras informaram) ---------- */
+function lerY570(headers, rows, files) {
+  const hk = headers.map(normKey), ix = n => hk.indexOf(n), I = { ano: ix('ano'), per: ix('periodo inicial'), fonte: ix('cnpj fonte pagadora'), nome: ix('nome fonte pagadora'), cod: ix('codigo receita'), desc: ix('descricao codigo receita'), rend: ix('vlr rendimento bruto'), ir: ix('vlr ir retido fonte'), csll: ix('vlr csll retido fonte'), cnpj: ix('cnpj') };
+  const L = []; for (const r of rows) { const f = digits(r[I.fonte]); if (!f) continue; const ano = +(String(r[I.ano] || '').slice(0, 4)) || Math.floor((ymDe(r[I.per]) || 0) / 100); L.push({ ano, fonte: f.padStart(14, '0'), nome: String(r[I.nome] || '').trim(), cod: digits(r[I.cod]), desc: String(r[I.desc] || '').trim(), rend: toNum(r[I.rend]), ir: toNum(r[I.ir]), csll: toNum(r[I.csll]) }); }
+  const cnpj = I.cnpj >= 0 ? (rows.map(r => digits(r[I.cnpj])).find(c => c.length >= 11) || '') : '';
+  return { L, files, cnpj };
+}
+function lerDIRF(headers, rows, files) {
+  const hk = headers.map(normKey), ix = n => hk.indexOf(n), I = { ano: ix('ano calendario'), fonte: ix('cnpj fonte pagadora'), nome: ix('razao social fonte pagadora'), cod: ix('codigo receita'), desc: ix('descricao codigo darf'), rend: ix('vlr rendimento tributavel'), imp: ix('vlr imposto retido'), cnpj: ix('cnpj beneficiario') };
+  const L = []; for (const r of rows) { const f = digits(r[I.fonte]); if (!f) continue; L.push({ ano: +String(r[I.ano] || '').slice(0, 4), fonte: f.padStart(14, '0'), nome: String(r[I.nome] || '').trim(), cod: digits(r[I.cod]), desc: String(r[I.desc] || '').trim(), rend: toNum(r[I.rend]), imp: toNum(r[I.imp]) }); }
+  const cnpj = I.cnpj >= 0 ? (rows.map(r => digits(r[I.cnpj])).find(c => c.length >= 11) || '') : '';
+  return { L, files, cnpj };
+}
+/* retenção informada na DIRF e não escriturada na ECF (mesmo ano, fonte pagadora e código) */
+function analisarRetencoes() {
+  const r = extrasDaEmpresa().ret; if (!r || !r.dirf) return null;
+  const chave = x => x.ano + '|' + x.fonte.slice(0, 8) + '|' + x.cod, ecf = new Set(r.y570 ? r.y570.L.map(chave) : []);
+  const faltam = new Map(); let tot = 0, totDirf = 0;
+  for (const x of r.dirf.L) { totDirf += x.imp; if (!r.y570 || ecf.has(chave(x)) || !(x.imp > 0)) continue; const a = faltam.get(x.ano) || { ano: x.ano, imp: 0, n: 0, fontes: new Set() }; a.imp += x.imp; a.n++; a.fontes.add(x.nome); faltam.set(x.ano, a); tot += x.imp; }
+  return { comY570: !!r.y570, faltam: [...faltam.values()].sort((a, b) => a.ano - b.ano).map(a => Object.assign(a, { imp: r2(a.imp), fontes: [...a.fontes] })), tot: r2(tot), totDirf: r2(totDirf), anos: [...new Set(r.dirf.L.map(x => x.ano))].sort(), nEcf: r.y570 ? r.y570.L.length : 0 };
+}
+
+/* ---------- PER/DCOMP (PDF do e-CAC): texto das páginas -> dados do pedido ---------- */
+let _pdfjs = null;
+function carregarPdfjs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjs) return _pdfjs;
+  const um = (id, src) => new Promise((ok, erro) => { const s = document.createElement('script'), emb = document.getElementById(id); if (emb) { s.textContent = emb.textContent; document.head.appendChild(s); ok(); } else { s.src = src; s.onload = ok; s.onerror = () => erro(new Error('não foi possível carregar o leitor de PDF')); document.head.appendChild(s); } });
+  // o "worker" roda na própria página (pdfjsWorker global): não precisa de Worker nem de outro domínio
+  _pdfjs = um('rf-pdfjs-worker', '/vendor/pdf.worker.min.js').then(() => um('rf-pdfjs', '/vendor/pdf.min.js')).then(() => window.pdfjsLib);
+  return _pdfjs;
+}
+async function pdfLinhas(file) {
+  const lib = await carregarPdfjs(), doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise, out = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const tc = await (await doc.getPage(i)).getTextContent(), L = new Map();
+    for (const it of tc.items) { if (!it.str || !it.str.trim()) continue; const y = Math.round(it.transform[5]); let k = [...L.keys()].find(z => Math.abs(z - y) <= 2); if (k == null) { k = y; L.set(k, []); } L.get(k).push(it); }
+    for (const y of [...L.keys()].sort((a, b) => b - a)) out.push(L.get(y).sort((a, b) => a.transform[4] - b.transform[4]).map(t => t.str.trim()).join(' | '));
+  }
+  return out;
+}
+function lerPerdcomp(lines, nome) {
+  const txt = lines.join('\n'); if (!/PERDCOMP|PER\/DCOMP/i.test(txt) || !/Tipo de Cr[ée]dito/i.test(txt)) return null;
+  const campo = (re, desde = 0) => { for (let i = desde; i < lines.length; i++) { const p = lines[i].split(' | '); if (re.test(p[0])) return p.slice(1).join(' ').trim() || null; } return null; };
+  let iOrig = lines.findIndex(l => /^ORIGEM DO CR[ÉE]DITO/i.test(l)); if (iOrig < 0) iOrig = lines.findIndex(l => /^CR[ÉE]DITO [A-ZÇÃÉ ]{6,}$/.test(l.trim())); // PER/DCOMP 8.0: sem o título ORIGEM
+  const num = (txt.match(/\d{5}\.\d{5}\.\d{6}\.\d\.\d\.\d{2}-\d{4}/) || [])[0] || nome;
+  const dt = campo(/^Data de Transmiss[ãa]o$/i), pa = iOrig >= 0 ? (lines.slice(iOrig).map(l => l.split(' | ')).find(p => p.some(x => /^Per[ií]odo de Apura[çc][ãa]o$/i.test(x))) || []).slice(-1)[0] : null;
+  const debitos = lines.map(l => /^\d{3}\. \| (D[ée]bito .+)$/i.exec(l) || /^\d{3}\. (D[ée]bito .+)$/i.exec(l)).filter(Boolean).map(m => m[1].replace(/ \| /g, ' ').trim());
+  const ymDt = v => { const m = /(\d{2})\/(\d{2})\/(\d{4})/.exec(v || ''); return m ? +m[3] * 100 + +m[2] : 0; };
+  return { num, files: [nome], cnpj: digits((txt.match(/CNPJ (\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/) || [])[1] || ''), transm: dt, ymT: ymDt(dt),
+    tipoDoc: campo(/^Tipo de Documento$/i), tipoCred: campo(/^Tipo de Cr[ée]dito$/i), retif: campo(/^PER\/DCOMP Retificador$/i), judicial: campo(/^Cr[ée]dito Oriundo de A[çc][ãa]o Judicial$/i),
+    valor: toNum(campo(/^Valor Original do Cr[ée]dito Inicial$/i)), atualizado: toNum(campo(/^Cr[ée]dito Atualizado$/i)), debitosTot: toNum(campo(/^Total dos D[ée]bitos deste Documento$/i)),
+    pa, ymPA: ymDt(pa), tributo: iOrig >= 0 ? campo(/^Grupo de Tributo$/i, iOrig) : null, codigo: iOrig >= 0 ? campo(/^C[óo]digo da Receita$/i, iOrig) : null, debitos };
+}
+/* PER/DCOMP x pontos do diagnóstico: o crédito pedido é do mesmo tributo e período de algum ponto? */
+function analisarPerdcomp() {
+  const L = extrasDaEmpresa().perdcomp; if (!L || !L.length) return null;
+  const Sa = resumoDe('SAI'), ex = analisarExclusao(), an = analisarAnulacoes(), faixas = [];
+  if (ex && ex.n) faixas.push({ t: 'exclusão do ICMS da base do PIS/COFINS', mi: ex.mi, ma: ex.ma });
+  if (an && an.n) faixas.push({ t: 'anulação de CT-e', mi: an.mi, ma: an.ma });
+  if (Sa && Sa.cats) for (const c of Sa.cats) if (c.pis + c.cof > 0) faixas.push({ t: 'PIS/COFINS sobre ' + c.cat.toLowerCase(), mi: c.mi, ma: c.ma });
+  for (const p of L) { p.conflito = /pis|cofins/i.test(p.tributo || '') && p.ymPA ? faixas.filter(f => p.ymPA >= f.mi && p.ymPA <= f.ma).map(f => f.t) : []; }
+  return { L, conflitos: L.filter(p => p.conflito.length) };
+}
