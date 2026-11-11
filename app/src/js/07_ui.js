@@ -30,7 +30,10 @@ function minutes() {
 /* ---------- topo e trilho ---------- */
 function renderChrome() {
   const c = $('#company');
-  if (!S.loaded) { c.innerHTML = '<span class="chip">Nenhuma planilha carregada</span>'; }
+  if (!S.loaded) {
+    const cx = S.extras && S.extras.cnpj, nm = cx ? (S.empresa && digits(S.empresa.cnpj) === cx && S.empresa.nome) || store.get(NOMES_KEY, {})[cx] : '';
+    c.innerHTML = cx ? (nm ? '<span class="chip nm"><b title="' + esc(nm) + '">' + esc(nm) + '</b></span>' : '') + '<span class="chip mono">' + esc(fmtCNPJ(cx)) + '</span><span class="chip opt">só planilhas complementares</span>' : '<span class="chip">Nenhuma planilha carregada</span>';
+  }
   else {
     const per = ymLabel(S.months[0].ym) + ' – ' + ymLabel(S.months[S.months.length - 1].ym);
     const tl = tiposCarregados();
@@ -180,13 +183,29 @@ async function lerArquivos(files, onStep, onFile) {
   if (lst.length > 1 && lst[0].cnpj && lst[1].cnpj && lst[0].cnpj !== lst[1].cnpj) throw new Error('A 037 ("' + lst[0].fileNames[0] + '", CNPJ ' + fmtCNPJ(lst[0].cnpj) + ') e a 047 ("' + lst[1].fileNames[0] + '", CNPJ ' + fmtCNPJ(lst[1].cnpj) + ') são de empresas diferentes. Importe as planilhas de uma empresa por vez.');
   const ms = now() - t0;
   const out = lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
-  const c0 = lst.map(g => g.cnpj).find(Boolean) || (S.loaded ? digits(S.empresa.cnpj) : '');
+  const c0 = lst.map(g => g.cnpj).find(Boolean) || ''; // só o próprio lote decide; empresa diferente da que está na tela = troca de empresa (process)
   for (const x of extras) if (c0 && x.dados.cnpj && x.dados.cnpj !== c0) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ', e as planilhas da análise são do CNPJ ' + fmtCNPJ(c0) + '. Importe as planilhas de uma empresa por vez.');
+  // CNPJ do lote (planilhas ou complementares), para trocar de empresa quando for outra
+  out.cnpj = c0 || (extras.map(x => digits(x.dados.cnpj || '')).find(c => c.length >= 11) || '') || (speds.map(x => digits(x.cnpj || '')).find(c => c.length >= 11) || '');
+  for (const x of extras) if (out.cnpj && x.dados.cnpj && digits(x.dados.cnpj) !== out.cnpj) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ' e as outras planilhas do lote são do CNPJ ' + fmtCNPJ(out.cnpj) + '. Importe as planilhas de uma empresa por vez.');
   out.extras = extras; out.speds = speds; out.ignorados = ignorados; out.repetidos = repetidos;
   if (!out.length && !extras.length && !speds.length && ignorados.length) throw new Error('Os arquivos .txt enviados não são SPED da EFD ICMS/IPI: ' + ignorados.slice(0, 3).join(', ') + (ignorados.length > 3 ? '…' : '') + '. Do SPED, o Revisor lê só o registro 0150 da EFD ICMS/IPI.');
   return out;
 }
 
+/* lote de outra empresa: a anterior (ou a demonstração) sai da tela, com os complementares dela; o nome volta pelo CNPJ */
+function trocarEmpresaSeOutra(c) {
+  if (!c) return;
+  const atual = S.loaded ? digits(S.empresa.cnpj) : (S.extras.cnpj || '');
+  if (!S.demo && atual === c) return;
+  if (S.loaded || S.demo || (atual && atual !== c)) {
+    S.analyses = {}; S.loaded = false; S.demo = false;
+    S.extras = { cnpj: c, j513: null, ecf: null, ecd: null, ecdA: null, icmsS: null, icmsE: null, ie0150: null };
+    S.empresa = { nome: store.get(NOMES_KEY, {})[c] || '', cnpj: c };
+    if (atual && atual !== c) toast('Outra empresa (CNPJ ' + fmtCNPJ(c) + '): a análise anterior foi fechada.', 4500);
+  }
+  if (!S.loaded) S.empresa = { nome: store.get(NOMES_KEY, {})[c] || '', cnpj: c };
+}
 /* depois de cada planilha: junta com a outra análise da mesma empresa (outra empresa sai da tela), recupera o nome e o logotipo */
 const NOMES_KEY = 'revisor-fiscal-empresas-v1';
 const tiposCarregados = () => !S.loaded ? [] : ['ENT', 'SAI'].filter(t => t === S.tipo || (S.analyses[t] && digits(S.analyses[t].snap.empresa.cnpj) === digits(S.empresa.cnpj)));
@@ -231,13 +250,14 @@ async function process(input) {
   else if (input.demo) showFiles((input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).map(t => ({ name: MODES[t].titulo + '.xlsx' })));
   paint(); total('processando…');
   const errEl = $('#imp-err'); if (errEl) errEl.innerHTML = '';
-  const feitas = []; let extrasLidas = [], spedsLidos = [];
+  const feitas = []; let extrasLidas = [], spedsLidos = [], lidosCnpj = '';
   try {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); lidosCnpj = lidos.cnpj || ''; extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
+    if (!input.demo) trocarEmpresaSeOutra(lidosCnpj);
     for (let k = 0; k < jobs.length; k++) {
       const j = jobs[k], md = MODES[j.demo || j.pre.tipo], pref = jobs.length > 1 ? (k + 1) + ' de ' + jobs.length + ' · ' : '';
       if (k > 0) { st = {}; paint(); }
