@@ -144,7 +144,8 @@ function showImportError(msg) { const e = $('#imp-err'); if (e) e.innerHTML = '<
 /* Vários arquivos de uma vez: cada um é lido, reconhecido pelo cabeçalho (037 ou 047) e entra na sua análise.
    Arquivos da mesma planilha (a 037 dividida por ano, por exemplo) são unidos. */
 async function lerArquivos(files, onStep, onFile) {
-  const t0 = now(), grupos = new Map(), extras = [], speds = [], ignorados = []; let nLin = 0;
+  const t0 = now(), grupos = new Map(), extras = [], speds = [], ignorados = [], repetidos = [], vistos = new Map(); let nLin = 0;
+  const marca = rows => rows.length + '|' + JSON.stringify(rows[0] || null) + '|' + JSON.stringify(rows[rows.length - 1] || null); // o mesmo arquivo duas vezes (ou uma cópia com outro nome)
   for (let k = 0; k < files.length; k++) {
     const f = files[k], pre = files.length > 1 ? 'Arquivo ' + (k + 1) + ' de ' + files.length + ' · ' : '';
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
@@ -154,6 +155,9 @@ async function lerArquivos(files, onStep, onFile) {
       continue;
     }
     const wb = await readWorkbook(f, d => onStep({ id: 'ler', state: 'run', detail: pre + d }));
+    const fp = wb.headers.map(normKey).join('|') + '#' + marca(wb.rows);
+    if (vistos.has(fp)) { repetidos.push(f.name + ' (igual a ' + vistos.get(fp) + ')'); if (onFile) onFile(k, 'REPETIDO'); continue; }
+    vistos.set(fp, f.name);
     const tx = tipoExtra(wb.headers.map(normKey));
     if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : tx === 'ICMS' ? lerICMS(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
@@ -178,7 +182,7 @@ async function lerArquivos(files, onStep, onFile) {
   const out = lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
   const c0 = lst.map(g => g.cnpj).find(Boolean) || (S.loaded ? digits(S.empresa.cnpj) : '');
   for (const x of extras) if (c0 && x.dados.cnpj && x.dados.cnpj !== c0) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ', e as planilhas da análise são do CNPJ ' + fmtCNPJ(c0) + '. Importe as planilhas de uma empresa por vez.');
-  out.extras = extras; out.speds = speds; out.ignorados = ignorados;
+  out.extras = extras; out.speds = speds; out.ignorados = ignorados; out.repetidos = repetidos;
   if (!out.length && !extras.length && !speds.length && ignorados.length) throw new Error('Os arquivos .txt enviados não são SPED da EFD ICMS/IPI: ' + ignorados.slice(0, 3).join(', ') + (ignorados.length > 3 ? '…' : '') + '. Do SPED, o Revisor lê só o registro 0150 da EFD ICMS/IPI.');
   return out;
 }
@@ -196,6 +200,7 @@ async function posCarga() {
     o.empresa = S.empresa; // o mesmo cadastro nas duas análises: o nome digitado vale para a 037 e a 047
   }
   if (!S.empresa.nome && c && !S.demo) { const nm = store.get(NOMES_KEY, {})[c]; if (nm) S.empresa.nome = nm; }
+  const nDec = reaplicarDecisoes(); if (nDec) setTimeout(() => toast(nDec + ' decisões da ' + MODE.planilha + ' desta empresa, feitas antes neste computador, foram reaplicadas.', 6000), 300);
   guardarAnalise();
   await carregarLogoCliente();
 }
@@ -231,7 +236,7 @@ async function process(input) {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
     for (let k = 0; k < jobs.length; k++) {
       const j = jobs[k], md = MODES[j.demo || j.pre.tipo], pref = jobs.length > 1 ? (k + 1) + ' de ' + jobs.length + ' · ' : '';
@@ -279,6 +284,12 @@ async function process(input) {
 function importFiles(files) { process({ demo: false, files }); }
 
 /* ---------- 2. painel ---------- */
+/* aviso: grupos em AVALIAR ainda fora do total (é a diferença mais comum com a conta feita à mão) */
+function avisoAvaliar() {
+  const p = avaliarPendente(); if (!p.n) return '';
+  return '<div class="err-box" style="margin:0 0 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>' + fNum(p.grupos) + ' grupo' + (p.grupos === 1 ? '' : 's') + ' em AVALIAR (' + fNum(p.n) + ' itens) ainda fora do total.</b> ' +
+    TX('Se forem COM CREDITO, o crédito sobe até ', 'Se forem RECUPERAR, o valor sobe até ') + fBRL(p.v) + '. Decida esses grupos antes de comparar com a planilha feita à mão.</div><button class="btn" data-go-ava="1" type="button">Decidir os grupos em AVALIAR</button></div>';
+}
 function viewPainel() {
   const T = S.totals, potT = S.pot.pis + S.pot.cof, risk = S.checks.filter(c => c.st === 'risk'), contT = risk.reduce((a, c) => a + (c.v || 0), 0);
   const per = ymLabel(S.months[0].ym) + ' a ' + ymLabel(S.months[S.months.length - 1].ym);
@@ -289,7 +300,7 @@ function viewPainel() {
   return '<div class="phead"><div><span class="band">Etapa 2 · Painel</span><h1><em>' + fBRL(potT) + '</em> de crédito não aproveitado</h1>' +
     '<p>' + esc(S.empresa.nome || 'CNPJ ' + fmtCNPJ(S.empresa.cnpj)) + ' · ' + per + ' · ' + fNum(T.n) + ' linhas lidas e organizadas em ' + fMs(S.procMs) + '. Valores nominais; a classificação ainda pode ser revisada.</p></div>' +
     '<div class="toolbar"><button class="btn" data-go="classificar" type="button">Revisar classificação</button><button class="btn primary" data-go="exportar" type="button">' + ICON.dl + 'Gerar Excel e Word</button></div></div>' +
-    '<div class="kpis">' +
+    avisoAvaliar() + '<div class="kpis">' +
     kpi('Linhas processadas', fNum(T.n), S.months.length + ' meses · ' + fNum(new Set(S.recs.map(r => r.registro)).size) + ' registros') +
     kpi('Entradas (Vlr Item)', fBRLc(T.vlrItem), fBRL(T.vlrItem)) +
     kpi('Crédito escriturado', fBRLc(T.pis + T.cof), 'PIS ' + fBRLc(T.pis) + ' · COFINS ' + fBRLc(T.cof)) +
@@ -315,7 +326,7 @@ function viewPainelSai(T, potT, per, tm, econ, comG, anos, regs) {
   return '<div class="phead"><div><span class="band">Etapa 2 · Painel · Saídas (047)</span><h1><em>' + fBRL(tot) + '</em> de PIS/COFINS pagos a maior nas vendas</h1>' +
     '<p>' + esc(S.empresa.nome || 'CNPJ ' + fmtCNPJ(S.empresa.cnpj)) + ' · ' + per + ' · ' + fNum(T.n) + ' linhas lidas e organizadas em ' + fMs(S.procMs) + '. Vendas tributadas indevidamente' + (icmsV ? ' e ICMS na base de cálculo (Tema 69)' : '') + '. Valores nominais; a classificação ainda pode ser revisada.</p></div>' +
     '<div class="toolbar"><button class="btn" data-go="classificar" type="button">Revisar classificação</button><button class="btn primary" data-go="exportar" type="button">' + ICON.dl + 'Gerar Excel e Word</button></div></div>' +
-    '<div class="kpis">' +
+    avisoAvaliar() + '<div class="kpis">' +
     kpi('Linhas processadas', fNum(T.n), S.months.length + ' meses · ' + fNum(new Set(S.recs.map(r => r.registro)).size) + ' registros') +
     kpi('Saídas (Vlr Item)', fBRLc(T.vlrItem), fBRL(T.vlrItem)) +
     kpi('PIS/COFINS sobre as vendas', fBRLc(T.pis + T.cof), 'PIS ' + fBRLc(T.pis) + ' · COFINS ' + fBRLc(T.cof)) +
@@ -473,7 +484,8 @@ const nomeArq = () => (S.empresa.nome.trim() || fmtCNPJ(S.empresa.cnpj)).replace
 function viewExportar() {
   const st = S.settings, tl = tiposCarregados(), falta = ['ENT', 'SAI'].filter(t => !tl.includes(t)), md = S.modelo, nomeOk = !!S.empresa.nome.trim();
   const rel = S.relatModelo && S.relatModelo.cnpj === digits(S.empresa.cnpj) ? S.relatModelo : null;
-  const linhaAn = t => { const a = anaDe(t); return '<li class="rd ok"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + '</b><div class="small muted">' + fNum(a.totals.n) + ' linhas · ' + ymLabel(a.months[0].ym) + ' a ' + ymLabel(a.months[a.months.length - 1].ym) + ' · ' + esc(a.files.join(', ')) + '</div></div><span></span></li>'; };
+  const linhaAn = t => { const a = anaDe(t), p = avaliarPendente(a); return '<li class="rd ' + (p.n ? 'warn' : 'ok') + '"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + '</b><div class="small muted">' + fNum(a.totals.n) + ' linhas · ' + ymLabel(a.months[0].ym) + ' a ' + ymLabel(a.months[a.months.length - 1].ym) + ' · ' + esc(a.files.join(', ')) + '</div>' +
+    (p.n ? '<div class="small"><b>' + fNum(p.grupos) + ' grupos em AVALIAR</b> fora do total (até ' + fBRL(p.v) + '). O Excel e o Word saem assim mesmo, com o aviso no RESUMO.</div>' : '') + '</div><span></span></li>'; };
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
   const X5 = extrasDaEmpresa();
@@ -502,7 +514,8 @@ function viewExportar() {
       ((rel.amarelo || []).length ? '<details class="rep" style="margin-top:10px"><summary>' + rel.amarelo.length + ' trecho' + (rel.amarelo.length === 1 ? '' : 's') + ' de texto em amarelo para revisar</summary><ul class="rel-list pend" style="margin-top:8px">' + rel.amarelo.slice(0, 30).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></details>' : '') + '</div></div></section>' : '') +
     '<section class="card"><div class="card-h"><h2>Dados do relatório</h2><button class="btn" data-act="perfil" type="button">Editar no perfil</button></div><div class="card-b" style="display:grid;gap:14px">' +
     '<p class="small">Assina o relatório: <b>' + esc(st.analista || 'nome não informado') + '</b>' + (S.perfil.cargo ? ', ' + esc(S.perfil.cargo) : '') + (S.perfil.oab ? ' · OAB ' + esc(S.perfil.oab) : '') + ' · ' + esc(st.escritorio || 'escritório') + ' · carta datada em <b>' + esc(st.cidade || '—') + '</b>.</p>' +
-    (tl.includes('ENT') ? '<label class="toggle"><input type="checkbox" id="f-icms"' + (st.excluirIcms ? ' checked' : '') + '><span><b>037: excluir o ICMS da base do crédito a partir de 05/2023</b><br><span class="small muted">Lei 14.592/2023. Desmarque só se houver decisão judicial em favor da empresa. Também pode ser alterado depois, na aba RESUMO do Excel.</span></span></label>' : '') +
+    (tl.includes('ENT') ? '<label class="toggle"><input type="checkbox" id="f-icms"' + (st.excluirIcms ? ' checked' : '') + '><span><b>037: excluir o ICMS da base do crédito a partir de 05/2023</b><br><span class="small muted">Lei 14.592/2023. Desmarque só se houver decisão judicial em favor da empresa. Também pode ser alterado depois, na aba RESUMO do Excel.</span></span></label>' +
+      '<label class="toggle"><input type="checkbox" id="f-desc"' + (st.descontoItem !== false ? ' checked' : '') + '><span><b>037: descontar o Vlr Desconto Item da base do crédito</b><br><span class="small muted">O crédito é sobre o valor líquido da compra. Desmarque para calcular sobre o Vlr Item cheio, como algumas planilhas da equipe. Também muda na aba RESUMO do Excel.</span></span></label>' : '') +
     '</div></section>' +
     '<h2 class="sec-h">Arquivos separados</h2><div class="exports">' +
     tl.map(t => '<section class="card xp">' + fileIcon('x', 'Planilha do Excel (.xlsx)') + '<h3>Excel ' + MODES[t].planilha + ' · ' + MODES[t].nome + '</h3><p class="small muted">' + tabsTxt(t) + '</p><div class="tabs-list">' + tabs(t).map(x => '<span>' + x + '</span>').join('') + '</div><button class="btn big" data-act="xlsx" data-tipo="' + t + '" type="button">' + ICON.dl + 'Baixar Excel ' + MODES[t].planilha + '</button></section>').join('') +
@@ -533,6 +546,7 @@ function bindEvents() {
   const view = $('#view');
   view.addEventListener('click', async e => {
     const t = e.target;
+    const avaBtn = t.closest('[data-go-ava]'); if (avaBtn) { S.ui.filter = 'AVA'; go('classificar'); return; }
     const goBtn = t.closest('[data-go]'); if (goBtn) { go(goBtn.dataset.go); return; }
     const f = t.closest('[data-filter]'); if (f) { S.ui.filter = f.dataset.filter; S.ui.showN = 60; render(); return; }
     const cp = t.closest('[data-copy]');
@@ -566,6 +580,7 @@ function bindEvents() {
     const t = e.target;
     if (t.matches('select[data-cls]')) { const g = S.groups.find(x => x.key === t.dataset.cls); setGroupCls(g, t.value); const tr = t.closest('tr'); tr.outerHTML = groupRow(g); renderChrome(); refreshClsHeader(); toast('Grupo ' + fmtNCM(g.ncm) + ' · ' + t.value); }
     if (t.matches('[data-prem]')) { const v = parseFloat(String(t.value).replace(',', '.')); if (isFinite(v) && v >= 0) { S.settings[t.dataset.prem] = v; saveSettings(); const pos = t.id; render(); const el = $('#' + pos); if (el) { el.closest('details').open = true; el.focus(); } } }
+    if (t.id === 'f-desc') { S.settings.descontoItem = t.checked; saveSettings(); recompute(); renderChrome(); toast('Crédito potencial recalculado: ' + fBRL(S.pot.pis + S.pot.cof)); }
     if (t.id === 'f-icms') { S.settings.excluirIcms = t.checked; saveSettings(); recompute(); renderChrome(); toast('Crédito potencial recalculado: ' + fBRL(S.pot.pis + S.pot.cof)); }
   });
   view.addEventListener('input', e => {

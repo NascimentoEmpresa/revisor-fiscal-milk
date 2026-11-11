@@ -21,7 +21,8 @@ const ECD_REGRAS = [
   { re: /telefon|internet|comunica[cç]|correio|material de escrit|honor[aá]rios cont|advocat|consultoria|propaganda|publicidade|marketing|viagens?|hospedag|representa[cç]/, cat: 'Despesas administrativas e comerciais', cls: 'NAO' },
   // hipóteses expressas do art. 3º
   { re: /energia el[eé]tric|energia\b|luz e for[cç]a/, cat: 'Energia elétrica (art. 3º, III)', cls: 'SIM' },
-  { re: /alugu[eé]l|loca[cç][aã]o de (pr[eé]dio|im[oó]v|m[aá]quina|equip|ve[ií]cul)|arrendamento mercantil|leasing/, cat: 'Aluguéis e arrendamento (art. 3º, IV e V)', cls: 'SIM' },
+  { re: /arrendamento mercantil|leasing/, cat: 'Arrendamento mercantil (art. 3º, V)', cls: 'SIM' },
+  { re: /alugu[eé]l|loca[cç][aã]o de (pr[eé]dio|im[oó]v|m[aá]quina|equip|ve[ií]cul)/, cat: 'Aluguéis (art. 3º, IV): só dá crédito se pago a pessoa jurídica', cls: 'AVA' },
   { re: /deprecia|amortiza/, cat: 'Depreciação e amortização (art. 3º, VI e VII)', cls: 'SIM' },
   { re: /combust[ií]v|lubrific|diesel|gasolina|[oó]leo/, cat: 'Combustíveis e lubrificantes (art. 3º, II)', cls: 'SIM' },
   { re: /frete|carreto|armazenag|transporte de (carga|mercad)/, cat: 'Fretes e armazenagem (art. 3º, IX)', cls: 'SIM' },
@@ -76,13 +77,16 @@ function mesesNC() {
 function jaUtilizado037() {
   const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap);
   if (!a || !a.recs || !a.map || a.map.contaCtb == null) return null;
-  const P = new Map(), iN = a.map.nomeCtb;
+  const P = new Map(), iN = a.map.nomeCtb, iNat = a.hkey ? a.hkey.indexOf('natureza credito') : -1;
   for (const r of a.recs) {
     if (!((r.vlrPis || 0) > 0)) continue;
     const ativo = /^F1[23]0/.test(r.registro);
     const k = ativo ? '#ATIVO' : String(r.v[a.map.contaCtb] == null ? '' : r.v[a.map.contaCtb]).trim() || '#SEM';
     const p = P.get(k) || { conta: k, nome: ativo ? 'Bens do ativo imobilizado (F120/F130)' : (iN != null ? String(r.v[iN] || '').trim() : ''), base: 0, n: 0, anos: new Map() };
     p.base += r.bcPis || 0; p.n++; p.anos.set(r.ano, (p.anos.get(r.ano) || 0) + (r.bcPis || 0)); P.set(k, p);
+    // natureza do crédito (04 energia, 09/10/11 ativo...): serve quando a conta da 037 não existe na ECD (ex.: conta "GERAL")
+    const nat = iNat >= 0 ? String(r.v[iNat] || '').trim().slice(0, 2) : '';
+    if (!p.nats) p.nats = new Map(); const pn = p.nats.get(nat) || new Map(); pn.set(r.ano, (pn.get(r.ano) || 0) + (r.bcPis || 0)); p.nats.set(nat, pn);
   }
   return P;
 }
@@ -102,14 +106,20 @@ function analisarECD(e) {
   }
   // já utilizado: mesma conta contábil; bens do ativo na conta de depreciação; as demais, como a analista atribuir
   e.semConta = [];
-  if (ja) for (const p of ja.values()) {
+  const NAT_ALVO = { '04': /energia|luz e for/i, '05': /alugu|loca[cç]/i, '06': /alugu|loca[cç]/i, '08': /arrendamento|leasing/i, '07': /frete|carreto|armazen/i, '14': /frete|carreto|transporte/i, '09': /deprecia/i, '10': /deprecia/i, '11': /deprecia|amortiza/i };
+  const contaNat = nat => { const re = NAT_ALVO[nat]; if (!re) return null; return [...e.contas.values()].filter(c => re.test(c.desc) && c.despesa && clsConta(c) !== ECD_CLS.NAO).sort((a, b) => b.valor - a.valor)[0] || null; };
+  if (ja) for (const p0 of ja.values()) {
+    // conta da 037 que não existe na ECD: reparte pela natureza do crédito, sem decisão manual
+    const parts = p0.conta !== '#ATIVO' && !e.contas.has(p0.conta) && !(e.atrib[p0.conta] != null) && p0.nats && p0.nats.size ? [...p0.nats].map(([nat, anos]) => ({ conta: p0.conta + (nat ? ' · natureza ' + nat : ''), nome: p0.nome, n: p0.n, anos, nat, porNat: contaNat(nat) })) : [p0];
+    for (const p of parts) {
     let base = 0; for (const [ano, v] of p.anos) if (e.anosEscopo.includes(ano)) base += v;
     if (!base) continue;
     const manual = e.atrib[p.conta] != null && e.atrib[p.conta] !== '';
-    let alvo = manual ? e.contas.get(e.atrib[p.conta]) : e.atrib[p.conta] === '' ? null : p.conta === '#ATIVO' ? depr : e.contas.get(p.conta);
+    let alvo = manual ? e.contas.get(e.atrib[p.conta]) : e.atrib[p.conta] === '' ? null : p.conta === '#ATIVO' ? depr : p.porNat !== undefined ? p.porNat : e.contas.get(p.conta);
     if (alvo && !manual && (!alvo.despesa || clsConta(alvo) === ECD_CLS.NAO)) alvo = null; // conta de receita ou fora da análise: a analista decide
-    if (alvo) { alvo.ja = r2(alvo.ja + base); alvo.jaDe.push(p.conta === '#ATIVO' ? 'bens do ativo (F120)' : 'conta ' + p.conta); }
+    if (alvo) { alvo.ja = r2(alvo.ja + base); alvo.jaDe.push(p.conta === '#ATIVO' ? 'bens do ativo (F120)' : p.porNat !== undefined ? 'natureza ' + p.nat + ' da 037' : 'conta ' + p.conta); }
     if (!alvo || manual) e.semConta.push({ conta: p.conta, nome: p.nome, base: r2(base), n: p.n, atrib: e.atrib[p.conta] });
+    }
   }
   recalcECD(e);
   return e;
@@ -122,7 +132,7 @@ function recalcECD(e) {
     const cls = clsConta(c);
     if (cls === ECD_CLS.AVA) R.ava++;
     if (cls !== ECD_CLS.SIM) continue;
-    R.sim++; R.valor += c.valor; R.ja += c.ja; R.dif += c.valor - c.ja; // como a analista: a diferença negativa também entra no total
+    const v = c.ajuste != null ? c.ajuste : c.valor; R.sim++; R.valor += v; R.ja += c.ja; R.dif += v - c.ja; // como a analista: a diferença negativa também entra no total
   }
   R.valor = r2(R.valor); R.ja = r2(R.ja); R.dif = r2(R.dif);
   // como a analista: 9,25% de uma vez sobre a diferença; o PIS é 1,65% e a COFINS o restante (fecha no centavo)
@@ -144,7 +154,7 @@ async function buildWorkbookECD(onProgress) {
       emit([{ v: 'ECD (I200/I250): débitos normais das contas de despesa em ' + anosTxt + ' (sem o encerramento). Já utilizado: base do PIS das notas com crédito da 037 na mesma conta (bens do ativo na depreciação). Fonte: ' + e.files.join(', '), s: XS.note }]);
       emit([]);
       const h0 = emit(['Rótulos de Linha', 'Soma de Vlr Partida', 'já utilizado', 'diferença', 'origem do já utilizado'], { s: XS.headG });
-      for (const c of sel) { const row = emit.proxima(); emit([c.desc, { v: c.valor, s: XS.brl }, { v: c.ja, s: XS.brl }, { v: r2(c.valor - c.ja), f: 'B' + row + '-C' + row, s: XS.brl }, c.jaDe.join(', ') || '—']); }
+      for (const c of sel) { const row = emit.proxima(), v = c.ajuste != null ? c.ajuste : c.valor; emit([c.desc, { v, s: XS.brl }, { v: c.ja, s: XS.brl }, { v: r2(v - c.ja), f: 'B' + row + '-C' + row, s: XS.brl }, (c.jaDe.join(', ') || '—') + (c.ajuste != null ? ' · valor ajustado pela analista (na ECD: ' + fBRL(c.valor) + ')' : '')]); }
       const tr = emit.proxima();
       emit([{ v: 'Total Geral', s: XS.txtB }, { v: R.valor, f: 'SUM(B' + (h0 + 1) + ':B' + (tr - 1) + ')', s: XS.brlB }, { v: R.ja, f: 'SUM(C' + (h0 + 1) + ':C' + (tr - 1) + ')', s: XS.brlB }, { v: R.dif, f: 'SUM(D' + (h0 + 1) + ':D' + (tr - 1) + ')', s: XS.brlB }]);
       emit([]);

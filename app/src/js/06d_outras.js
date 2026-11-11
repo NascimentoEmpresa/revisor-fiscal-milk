@@ -6,8 +6,11 @@ function quadroResumo() {
   const icm = Sa && Sa.icms && Sa.icms.n && !Sa.icms.residual ? Sa.icms : null;
   // ECD importada: calculada conta a conta; sem ela, a base que a analista informar
   const ecd = X.ecdA ? { base: X.ecdA.res.base, pis: X.ecdA.res.pis, cof: X.ecdA.res.cof } : X.ecd && X.ecd.base > 0 ? { base: r2(X.ecd.base), pis: r2(X.ecd.base * CRED_PIS), cof: r2(X.ecd.base * CRED_COF) } : null;
+  // 037 x ECD: a nota sem crédito da 037 numa conta que a ECD já inclui está dentro da diferença da ECD (não somar duas vezes)
+  const dup = sobreposicao037ECD(X);
+  const ent = E ? (dup.base > 0 ? { base: r2(E.pot.base - dup.base), pis: r2(E.pot.pis - dup.pis), cof: r2(E.pot.cof - dup.cof) } : E.pot) : null;
   const L = [
-    { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)', v: E ? E.pot : null, falta: 'importe a 037' },
+    { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)' + (dup.base > 0 ? ' — sem ' + fBRL(dup.pis + dup.cof) + ' já contados na ECD' : ''), v: ent, falta: 'importe a 037', dup },
     { k: 'j513', t: 'Notas não escrituradas no EFD-Contribuições (Junção 513)', v: j && (j.pis + j.cof) > 0 ? { base: j.base, pis: j.pis, cof: j.cof } : j ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a Junção 513' },
     { k: 'ecd', t: 'Créditos da ECD (diferença ECD x 037)', v: ecd, falta: 'importe a ECD ou informe a base abaixo' },
     { k: 'icms', t: 'Exclusão do ICMS da base do PIS/COFINS (047)', v: icm ? { base: icm.base, pis: icm.pis, cof: icm.cof } : Sa ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a 047', per: icm ? ymFaixa(icm.mi, icm.ma) : '' }
@@ -15,10 +18,27 @@ function quadroResumo() {
   // sem ICMS por item na 047 (transportadora com D200, por exemplo): a comparação mês a mês com a 070
   const ex = !(Sa && Sa.icms && Sa.icms.comIcms) ? analisarExclusao() : null;
   if (ex && ex.com047 && ex.n) Object.assign(L[3], { t: 'Exclusão do ICMS da base do PIS/COFINS (070 x 047, por mês)', v: { base: ex.base, pis: ex.pis, cof: ex.cof }, per: ymFaixa(ex.mi, ex.ma) });
+  // 047: PIS/COFINS pagos sobre vendas que não deveriam ser tributadas (alíquota zero, monofásico, ativo...), como no Word
+  if (Sa && Sa.cats && Sa.cats.length) { const v = Sa.cats.reduce((a, c) => ({ base: a.base + c.base, pis: a.pis + c.pis, cof: a.cof + c.cof }), { base: 0, pis: 0, cof: 0 }); L.push({ k: 'sai', t: 'PIS/COFINS pagos sobre vendas não tributáveis (047)', v: { base: r2(v.base), pis: r2(v.pis), cof: r2(v.cof) } }); }
   const an = analisarAnulacoes();
   if (an) L.push({ k: 'anul', t: 'Crédito não apropriado – anulações 1206/2206 (069)', v: { base: an.base, pis: an.pis, cof: an.cof }, per: an.n ? ymFaixa(an.mi, an.ma) : '' });
   const tot = L.reduce((a, l) => { if (l.v) { a.base += l.v.base; a.pis += l.v.pis; a.cof += l.v.cof; } return a; }, { base: 0, pis: 0, cof: 0 });
   return { L, tot: { base: r2(tot.base), pis: r2(tot.pis), cof: r2(tot.cof) } };
+}
+
+function sobreposicao037ECD(X) {
+  const R = { base: 0, pis: 0, cof: 0, n: 0 }, e = X.ecdA, a = anaENT();
+  if (!e || !a || !a.map || a.map.contaCtb == null) return R;
+  const sim = new Set([...e.contas.values()].filter(c => c.despesa && c.valor && clsConta(c) === ECD_CLS.SIM).map(c => c.conta));
+  const COM = MODES.ENT.cls.COM;
+  for (const r of a.alvo) {
+    const c = r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null); if (c !== COM) continue;
+    if (!sim.has(String(r.v[a.map.contaCtb] == null ? '' : r.v[a.map.contaCtb]).trim()) || !e.anosEscopo.includes(r.ano)) continue;
+    const mo = a.monthIdx.get(r.ym); if (!mo || mo.regime !== 'NC') continue;
+    const b = baseCredito(r);
+    R.base += b; R.pis += r2(b * 0.0165); R.cof += r2(b * 0.076); R.n++;
+  }
+  R.base = r2(R.base); R.pis = r2(R.pis); R.cof = r2(R.cof); return R;
 }
 
 function viewOutras() {
@@ -106,7 +126,7 @@ function cardECD(e) {
   const opts = [ECD_CLS.SIM, ECD_CLS.AVA, ECD_CLS.NAO], k = c => clsConta(c) === ECD_CLS.SIM ? 'COM' : clsConta(c) === ECD_CLS.AVA ? 'AVA' : 'SEM';
   const linha = c => '<tr><td class="mono small">' + esc(c.conta) + '</td><td><div>' + esc(c.desc) + '</div><div class="small muted">' + esc(c.ov ? 'Decisão do analista' : c.cat) + (c.jaDe.length ? ' · já utilizado: ' + esc(c.jaDe.join(', ')) : '') + '</div></td>' +
     '<td><select class="cls-select ' + k(c) + '" data-ecd="' + esc(c.conta) + '" aria-label="Incluir a conta ' + esc(c.desc) + '">' + opts.map(o => '<option' + (o === clsConta(c) ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></td>' +
-    '<td class="n">' + fBRL(c.valor) + '</td><td class="n">' + fBRL(c.ja) + '</td><td class="n"><b>' + fBRL(c.valor - c.ja) + '</b></td></tr>';
+    '<td class="n">' + fBRL(c.valor) + (clsConta(c) === ECD_CLS.SIM ? '<div><input type="text" inputmode="decimal" class="mono small" style="width:120px;text-align:right" data-ecd-aj="' + esc(c.conta) + '" value="' + (c.ajuste != null ? NUM2.format(c.ajuste) : '') + '" placeholder="valor considerado" aria-label="Valor considerado da conta ' + esc(c.desc) + '" title="Se você tirou lançamentos desta conta (ex.: serviços de pessoa física), informe o valor que fica"></div>' : '') + '</td><td class="n">' + fBRL(c.ja) + '</td><td class="n"><b>' + fBRL((c.ajuste != null ? c.ajuste : c.valor) - c.ja) + '</b>' + (c.ajuste != null ? '<div class="small muted">valor ajustado</div>' : '') + '</td></tr>';
   const contasOpt = [...e.contas.values()].filter(c => c.despesa && c.valor).sort((a, b) => a.desc.localeCompare(b.desc, 'pt-BR'));
   const sem = e.semConta.length ? '<div style="margin-top:14px"><b class="small">Créditos da 037 em contas fora da tabela</b><p class="small muted">Não entram no já utilizado. Se correspondem a uma conta da ECD, escolha qual.</p><div class="tbl-wrap"><table><thead><tr><th>Conta na 037</th><th class="n">Base do PIS</th><th>Somar no já utilizado de</th></tr></thead><tbody>' +
     e.semConta.map(s => '<tr><td>' + esc(s.conta.startsWith('#') ? s.nome : s.conta + (s.nome ? ' · ' + s.nome : '')) + '</td><td class="n">' + fBRL(s.base) + '</td><td><select data-ecd-atrib="' + esc(s.conta) + '"><option value="">— nenhuma —</option>' + contasOpt.map(c => '<option value="' + esc(c.conta) + '"' + (s.atrib === c.conta ? ' selected' : '') + '>' + esc(c.desc) + '</option>').join('') + '</select></td></tr>').join('') + '</tbody></table></div></div>' : '';
@@ -157,6 +177,8 @@ function bindOutras() {
     if (s) { const j = S.extras.j513, n = j.notas.find(x => x.i === +s.dataset.j); if (!n) return; n.ov = s.value === n.sug.cls ? null : s.value; recalcJ513(j); refreshOutras(); toast('Nota ' + n.num + ': ' + s.value + '.'); return; }
     const ec = e.target.closest('select[data-ecd]');
     if (ec) { const c = S.extras.ecdA.contas.get(ec.dataset.ecd); c.ov = ec.value === c.sug ? null : ec.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
+    const aj = e.target.closest('input[data-ecd-aj]');
+    if (aj) { const c = S.extras.ecdA.contas.get(aj.dataset.ecdAj), t = aj.value.trim(); c.ajuste = t ? r2(toNum(t)) : null; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     const at = e.target.closest('select[data-ecd-atrib]');
     if (at) { S.extras.ecdA.atrib[at.dataset.ecdAtrib] = at.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     const ie = e.target.closest('input[data-ie]');

@@ -467,7 +467,7 @@ async function buildWorkbook(onProgress) {
           const ok = cCls + row + '="' + CLS.COM + '"';
           fB = 'IF(' + ok + ',' + SL('bcPis') + row + ',0)'; fP = 'IF(' + ok + ',' + SL('vlrPis') + row + ',0)'; fC = 'IF(' + ok + ',' + SL('vlrCof') + row + ',0)';
         } else {
-          fB = 'IF(AND(' + cCls + row + '="' + CLS.COM + '",' + cReg + row + '="NÃO CUMULATIVO"),MAX(0,N(' + cItem + row + ')' + (cDesc ? '-N(' + cDesc + row + ')' : '') + (cIcms && (cMes || cPer) ? '-IF(AND(ExcluirICMS,' + desde0523(row) + '),N(' + cIcms + row + '),0)' : '') + '),0)';
+          fB = 'IF(AND(' + cCls + row + '="' + CLS.COM + '",' + cReg + row + '="NÃO CUMULATIVO"),MAX(0,N(' + cItem + row + ')' + (cDesc ? '-IF(DescontarDesconto,N(' + cDesc + row + '),0)' : '') + (cIcms && (cMes || cPer) ? '-IF(AND(ExcluirICMS,' + desde0523(row) + '),N(' + cIcms + row + '),0)' : '') + '),0)';
           fP = 'ROUND(' + cBase + row + '*1.65%,2)'; fC = 'ROUND(' + cBase + row + '*7.6%,2)';
         }
         cells.push(by ? by.motivo : 'Decisão do analista', by ? by.lei : '', by ? CONF[by.conf] : '—', rec.ov || g.dec ? 'Analista' : sug.origem, regTxt(mo),
@@ -569,9 +569,13 @@ async function buildWorkbook(onProgress) {
       emit([null, T_('Crédito potencial — PIS', 'Valor a recuperar — PIS'), { v: r2(S.pot.pis), f: AQ + 'D' + caTot, s: XS.brlB }]);
       emit([null, T_('Crédito potencial — COFINS', 'Valor a recuperar — COFINS'), { v: r2(S.pot.cof), f: AQ + 'E' + caTot, s: XS.brlB }]);
       emit([null, T_('Crédito potencial — total', 'Valor a recuperar — total'), { v: r2(potT), f: 'C12+C13', s: XS.brlB }]);
+      const pend = avaliarPendente();
+      if (pend.n) emit([null, { v: T_('Em AVALIAR, ainda fora do total: ', 'Em AVALIAR, ainda fora do total: ') + fNum(pend.n) + ' itens em ' + fNum(pend.grupos) + ' grupos (Vlr Item ' + fBRL(pend.vlr) + '). ' + T_('Se forem COM CREDITO, o crédito sobe até ', 'Se forem RECUPERAR, o valor sobe até ') + fBRL(pend.v) + '.', s: XS.txtB }]);
       if (!sai) {
         const exRow = emit([null, 'Excluir ICMS da base do crédito a partir de 05/2023 (Lei 14.592/2023)', { v: !!S.settings.excluirIcms, s: XS.bold }]);
         B.names.push({ name: 'ExcluirICMS', ref: 'RESUMO!$C$' + exRow });
+        const dsRow = emit([null, 'Descontar o Vlr Desconto Item da base do crédito', { v: S.settings.descontoItem !== false, s: XS.bold }]);
+        B.names.push({ name: 'DescontarDesconto', ref: 'RESUMO!$C$' + dsRow });
         emit([null, { v: 'Altere para VERDADEIRO/FALSO: a aba CRÉDITO APURADO recalcula. Na aba NOTAS SEM PC, mude a coluna CLASSIF. e o crédito se atualiza.', s: XS.note }]);
       } else emit([null, { v: 'Na aba ITENS A RECUPERAR (vendas marcadas RECUPERAR ou AVALIAR), mude a coluna CLASSIF. e a aba VALOR A RECUPERAR se atualiza.', s: XS.note }]);
       emit([]);
@@ -619,7 +623,8 @@ async function buildWorkbook(onProgress) {
         emit([{ v: a, s: XS.bold }, { v: 'Total ' + a, s: XS.bold }, { v: r2(y.base), f: 'SUM(C' + r0 + ':C' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.pis), f: 'SUM(D' + r0 + ':D' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.cof), f: 'SUM(E' + r0 + ':E' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.pis + y.cof), f: 'SUM(F' + r0 + ':F' + (row - 1) + ')', s: XS.brlB }]);
       }
       const row = first;
-      emit([{ v: 'Total geral', s: XS.txtB }, { v: '', s: XS.txtB }, { v: r2(S.pot.base), f: 'SUMIFS(C4:C' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis), f: 'SUMIFS(D4:D' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.cof), f: 'SUMIFS(E4:E' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis + S.pot.cof), f: 'SUMIFS(F4:F' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }]);
+      emit([{ v: 'Total geral', s: XS.txtB }, { v: '', s: XS.txtB }, { v: r2(S.pot.base), f: 'SUMIFS(C4:C' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis), f: sai ? 'SUMIFS(D4:D' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'ROUND(C' + row + '*1.65%,2)', s: XS.brlTot }, { v: r2(S.pot.cof), f: sai ? 'SUMIFS(E4:E' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'ROUND(C' + row + '*9.25%,2)-D' + row, s: XS.brlTot }, { v: r2(S.pot.pis + S.pot.cof), f: sai ? 'SUMIFS(F4:F' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'D' + row + '+E' + row, s: XS.brlTot }]);
+      if (!sai) emit([{ v: 'Total geral = base × 9,25% (PIS 1,65% e COFINS o restante), arredondado uma vez no total, como na planilha da equipe. Os meses e anos somam item a item e podem diferir em centavos.', s: XS.note }]);
     }
   });
 

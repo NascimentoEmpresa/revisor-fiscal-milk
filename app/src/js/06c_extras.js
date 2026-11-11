@@ -17,7 +17,7 @@ function tipoExtra(hk) {
   if (hk.includes('cst icms') && hk.includes('indicador emitente') && hk.includes('uf origem destino') && hk.includes('vlr icms')) return 'ICMS';
   return null;
 }
-const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
+const EXTRA_NOME = { REPETIDO: 'Repetido: lido uma vez só', J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
 
 /* ano-mês (aaaamm) de uma data em texto dd/mm/aaaa, Date ou número de série do Excel */
 function ymDe(v) {

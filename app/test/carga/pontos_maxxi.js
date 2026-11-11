@@ -23,6 +23,9 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALHA') + ' ' + m); if (!c) p
   ok(an.n === 1 && (an.pis + an.cof).toFixed(2) === '28672.34', 'anulação: ' + an.n + ' nota(s) ' + a21.map(d => d.data + ' ' + d.base).join(', ') + ' → ' + (an.pis + an.cof).toFixed(2) + ' (diagnóstico 28.672,34) · cumulativo para conferir: ' + an.cum + ' notas ' + an.cumBase);
   ok(dv.icms.toFixed(2) === '979.83', 'devoluções sem estorno: ' + dv.icms.toFixed(2) + ' em ' + dv.n + ' notas (analista 979,83) · estornadas ' + dv.estornado);
   for (const d of dv.docs) console.log('     ', d.num, d.cfop, d.icms, d.st);
+  S.extras.icmsS.presumido = '01/2022 a 09/2025'; A.analisarICMS(S.extras.icmsS);
+  const ep = A.analisarEstornoPresumido(); ok(ep.icms.toFixed(2) === '46.06', 'créditos de ICMS a estornar no presumido: ' + ep.icms.toFixed(2) + ' (diagnóstico 46,06)');
+  const st = ctx.__S.analyses.SAI.snap.servSemTrib; ok(st.base.toFixed(2) === '67894.85' && st.v.toFixed(2) === '2478.16', 'serviços sem PIS/COFINS: base ' + st.base + ' · tributo ' + st.v + ' (analista: base 67.894,85 · 2.478,16)');
   const G = A.quadroGeral(); console.log('QUADRO GERAL'); for (const x of G.rec) console.log('  ', x.bloco.padEnd(10), x.desc.padEnd(60), x.per.padEnd(20), x.v.toFixed(2));
   console.log('   TOTAL A RECUPERAR', G.totRec); for (const x of G.recolher) console.log('  ', x.bloco.padEnd(10), x.desc.padEnd(60), x.v.toFixed(2)); console.log('   TOTAL A RECOLHER', G.totRecolher);
   const b = await A.buildWorkbookPontos(); fs.writeFileSync('/tmp/claude-0/pontos_out.xlsx', Buffer.from(await b.arrayBuffer())); console.log('Excel outros pontos:', b.size, 'bytes');

@@ -7,7 +7,7 @@ const S = {
   headers: [], hkey: [], map: {}, missing: [], hasAnoMes: false,
   tipo: 'ENT', recs: [], com: [], sem: [], alvo: [], groups: [], months: [], monthIdx: new Map(),
   totals: {}, regTable: [], checks: [], timings: [], procMs: 0,
-  settings: Object.assign({ excluirIcms: true, cidade: 'Montenegro', escritorio: 'Milk Advocacia', analista: '', minManualBase: 60, minManualGrupo: 2, minAssistGrupo: .5, minRelManual: 180, minRelAssist: 45 }, store.get(SET_KEY, {})),
+  settings: Object.assign({ excluirIcms: true, descontoItem: true, cidade: 'Montenegro', escritorio: 'Milk Advocacia', analista: '', minManualBase: 60, minManualGrupo: 2, minAssistGrupo: .5, minRelManual: 180, minRelAssist: 45 }, store.get(SET_KEY, {})),
   kb: store.get(KB_KEY, {}),
   ui: { view: 'painel', filter: 'todos', q: '', sort: 'valor', showN: 60, drawer: null }
 };
@@ -30,7 +30,12 @@ async function readWorkbook(file, prog) {
   if (typeof XLSX === 'undefined') throw new Error('A biblioteca de leitura de Excel não carregou. Verifique a conexão com a internet e recarregue a página.');
   const buf = await file.arrayBuffer();
   await tick();
-  const wb = XLSX.read(buf, { type: 'array', dense: true, cellDates: true, cellNF: false, cellText: false, cellHTML: false });
+  let wb;
+  if (/\.(csv|txt)$/i.test(file.name || '')) {
+    // CSV salvo pelo Excel (Windows-1252, ";") ou em UTF-8: decodifica aqui e lê tudo como texto (CNPJ, NCM e chave sem perder zeros nem dígitos)
+    let txt; try { txt = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { txt = new TextDecoder('windows-1252').decode(buf); }
+    wb = XLSX.read(txt.replace(/^\uFEFF/, ''), { type: 'string', raw: true, dense: true });
+  } else wb = XLSX.read(buf, { type: 'array', dense: true, cellDates: true, cellNF: false, cellText: false, cellHTML: false });
   // a aba com mais linhas e com as colunas esperadas
   let best = null;
   for (const name of wb.SheetNames) {
@@ -74,6 +79,7 @@ const kbKey = g => MODE.kbPrefix + (g.ncm || '-') + '|' + (g.cfop || '-');
 
 /* --- pipeline: cada etapa é medida e mostrada na tela --- */
 async function runPipeline(input, onStep) {
+  S.decPronto = false;
   const T = [];
   const step = async (id, label, fn) => {
     onStep && onStep({ id, label, state: 'run' }); await tick();
@@ -220,15 +226,45 @@ async function runPipeline(input, onStep) {
 
 /* --- classificação final e crédito potencial --- */
 const clsOf = r => r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null);
+/* base do crédito de um item da 037: Vlr Item, menos o desconto (opção) e o ICMS a partir de 05/2023 (opção) */
+const baseCredito = r => Math.max(0, r.vlrItem - (S.settings.descontoItem !== false ? r.vlrDesc : 0) - (S.settings.excluirIcms && r.ym >= 202305 ? r.vlrIcms : 0));
+/* itens ainda em AVALIAR: não entram no total até a analista decidir. v = crédito (ou valor a recuperar) se todos fossem decididos a favor */
+function avaliarPendente(a = S) {
+  const R = { n: 0, grupos: 0, vlr: 0, v: 0 }; if (!a.alvo) return R;
+  const AVA = MODES[a.tipo].cls.AVA, gs = new Set();
+  for (const r of a.alvo) {
+    const c = r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null); if (c !== AVA) continue;
+    R.n++; R.vlr += r.vlrItem || 0; if (r.g) gs.add(r.g);
+    if (a.tipo === 'SAI') R.v += (r.vlrPis || 0) + (r.vlrCof || 0);
+    else { const mo = a.monthIdx.get(r.ym); if (mo && mo.regime === 'NC') R.v += baseCredito(r) * 0.0925; }
+  }
+  R.grupos = gs.size; R.vlr = r2(R.vlr); R.v = r2(R.v); return R;
+}
 function creditOf(r) {
   if (clsOf(r) !== CLS.COM) return null;
   if (S.tipo === 'SAI') return { base: r2(r.bcPis), pis: r2(r.vlrPis), cof: r2(r.vlrCof) }; // saída tributada indevidamente: o que foi pago
   const mo = S.monthIdx.get(r.ym);
   if (!mo || mo.regime !== 'NC') return null;
-  const base = Math.max(0, r.vlrItem - r.vlrDesc - (S.settings.excluirIcms && r.ym >= 202305 ? r.vlrIcms : 0));
+  const base = baseCredito(r);
   return { base: r2(base), pis: r2(base * .0165), cof: r2(base * .076) };
 }
 
+/* decisões da analista por empresa (CNPJ) e planilha: voltam sozinhas se a mesma empresa for importada de novo neste navegador */
+const DEC_KEY = 'revisor-fiscal-decisoes-v1';
+function guardarDecisoes() {
+  const c = digits(S.empresa && S.empresa.cnpj || ''); if (!c || S.demo || !S.groups || !S.decPronto) return; // só depois de reaplicar as decisões guardadas
+  const all = store.get(DEC_KEY, {}), m = {}; let n = 0;
+  for (const g of S.groups) if (g.dec) { m[g.key] = g.dec; n++; }
+  const k = c + '|' + S.tipo; if (n) all[k] = { em: Date.now(), m }; else delete all[k];
+  try { store.set(DEC_KEY, all); } catch (e) { /* armazenamento cheio: segue sem guardar */ }
+}
+function reaplicarDecisoes() {
+  S.decPronto = true;
+  const c = digits(S.empresa && S.empresa.cnpj || ''); if (!c || S.demo || !S.groups) return 0;
+  const x = store.get(DEC_KEY, {})[c + '|' + S.tipo]; if (!x || !x.m) return 0;
+  let n = 0; for (const g of S.groups) { const d = x.m[g.key]; if (d && clsDoModo(d)) { g.dec = d; n++; } }
+  if (n) recompute(); return n;
+}
 function recompute() {
   S.months.forEach(m => { m.pot = 0; m.potBase = 0; m.potPis = 0; m.potCof = 0; });
   let pot = { base: 0, pis: 0, cof: 0, n: 0 };
@@ -239,9 +275,12 @@ function recompute() {
     pot.base += c.base; pot.pis += c.pis; pot.cof += c.cof; pot.n++;
     const y = byYear.get(r.ano) || { ano: r.ano, base: 0, pis: 0, cof: 0 }; y.base += c.base; y.pis += c.pis; y.cof += c.cof; byYear.set(r.ano, y);
   }
+  // 037: como a analista, 9,25% sobre a base total, arredondado uma vez (PIS 1,65% e COFINS o restante)
+  if (S.tipo !== 'SAI') { pot.base = r2(pot.base); const tot = r2(pot.base * .0925); pot.pis = r2(pot.base * .0165); pot.cof = r2(tot - pot.pis); }
   S.pot = pot; S.potYears = [...byYear.values()].sort((a, b) => a.ano - b.ano);
   S.checks = runChecks();
   S.resumo = buildResumo();
+  guardarDecisoes();
   if (S.analyses && S.analyses[S.tipo] && S.analyses[S.tipo].snap.recs === S.recs) S.analyses[S.tipo].snap.resumo = S.resumo;
   const g = S.groups;
   S.clsCount = { COM: 0, SEM: 0, AVA: 0, revisados: 0, vlrRev: 0 };
@@ -473,6 +512,20 @@ function runChecksSai() {
     txt: sr.n ? fNum(sr.n) + ' itens vendidos sem as contribuições (CST 04 a 09) em ' + sr.ncms.size + ' NCM que não constam nas regras do Revisor: base de ' + fBRL(sr.base) + '. Se forem produtos tributados, o débito não recolhido seria de cerca de ' + fBRL(sr.v) + '.' : 'Todas as vendas sem PIS/COFINS têm NCM com regra de monofásico ou alíquota zero.',
     acao: sr.n ? 'Conferir o enquadramento desses NCM (a lista de regras é um ponto de partida e não esgota a legislação).' : 'Nada a fazer.', rel: ''
   });
+  // 8b. receita de serviço (transporte CFOP 535x, NFS-e A100) sem PIS/COFINS: possível débito não recolhido
+  const ss = { n: 0, base: 0, v: 0, pis: 0, cof: 0, mi: 0, ma: 0, regs: new Set() };
+  for (const r of S.sem) {
+    const transp = /^[56]3(5[1-9]|60)$/.test(r.cfop || ''), serv = /^a1/i.test(r.registro);
+    if (!(transp || serv) || !['08', '09', '49', '99'].includes(r.cst) || !(r.vlrItem > 0)) continue;
+    const mo = S.monthIdx.get(r.ym), cum = mo && mo.regime === 'CUM', pis = r.vlrItem * (cum ? .0065 : .0165), cof = r.vlrItem * (cum ? .03 : .076);
+    ss.n++; ss.base += r.vlrItem; ss.pis += pis; ss.cof += cof; ss.v += pis + cof; ss.regs.add(r.registro.slice(0, 4)); if (!ss.mi || r.ym < ss.mi) ss.mi = r.ym; if (r.ym > ss.ma) ss.ma = r.ym;
+  }
+  S.servSemTrib = { n: ss.n, base: r2(ss.base), pis: r2(ss.pis), cof: r2(ss.cof), v: r2(ss.v), mi: ss.mi, ma: ss.ma, regs: [...ss.regs] };
+  add({
+    id: 'serv-sem-trib', t: 'Receita de serviço (transporte ou NFS-e) sem PIS/COFINS', st: ss.n ? 'risk' : 'ok', n: ss.n, v: ss.n ? r2(ss.v) : null,
+    txt: ss.n ? fNum(ss.n) + ' documentos de serviço (' + [...ss.regs].join(', ') + ', ' + ymLabel(ss.mi) + ' a ' + ymLabel(ss.ma) + ') com CST 08, 09, 49 ou 99, que contam no faturamento mas não foram tributados: base de ' + fBRL(ss.base) + '. PIS e COFINS não recolhidos: ' + fBRL(ss.v) + ' (pela alíquota do regime de cada mês).' : 'Toda a receita de serviço foi tributada.',
+    acao: ss.n ? 'Conferir a natureza dessas prestações; se forem tributadas, recolher a diferença (vai para o quadro geral como valor a recolher).' : 'Nada a fazer.', rel: ''
+  });
   // 9. vendas consolidadas (NFC-e/cupom) sem o produto: a revisão por NCM não alcança essas vendas
   const cons = S.com.filter(r => !r.ncm && REG_CONSOLIDADO.test(r.registro));
   if (cons.length) {
@@ -503,7 +556,7 @@ function buildResumo() {
   const anosReg = {};
   for (const m of S.months) { const a = anosReg[m.ano] || (anosReg[m.ano] = { NC: 0, CUM: 0, SEM: 0 }); a[m.regime]++; }
   const ult = [...S.months].reverse().find(m => m.regime !== 'SEM');
-  const R = { tipo: S.tipo, cnpj: S.empresa.cnpj, ini: S.months[0].ym, fim: S.months[S.months.length - 1].ym, faixas, anosReg, regimeAtual: ult ? ult.regime : null, pot: { base: r2(S.pot.base), pis: r2(S.pot.pis), cof: r2(S.pot.cof) } };
+  const R = { ava: avaliarPendente(), tipo: S.tipo, cnpj: S.empresa.cnpj, ini: S.months[0].ym, fim: S.months[S.months.length - 1].ym, faixas, anosReg, regimeAtual: ult ? ult.regime : null, pot: { base: r2(S.pot.base), pis: r2(S.pot.pis), cof: r2(S.pot.cof) } };
   if (S.tipo === 'ENT') {
     const porNcm = new Map();
     for (const r of S.alvo) { const c = creditOf(r); if (!c) continue; const k = r.ncm || '-'; let x = porNcm.get(k); if (!x) porNcm.set(k, x = { ncm: r.ncm, desc: r.desc, base: 0, pis: 0, cof: 0, n: 0 }); x.base += c.base; x.pis += c.pis; x.cof += c.cof; x.n++; }
@@ -524,12 +577,13 @@ function buildResumo() {
     for (const g of S.groups) { if ((g.dec || g.sug.cls) !== CLS.COM || (g.dec && g.dec !== g.sug.cls) || !/Alíquota zero|Monofásico/.test(g.sug.cat || '') || !g.ncm) continue; const k = g.ncm, nr = ncmRule(g.ncm); const x = zm.get(k) || { ncm: g.ncm, nome: nr ? nr.nome : g.descTop, v: 0 }; x.v += g.vlr; zm.set(k, x); }
     R.zeroNcms = [...zm.values()].sort((a, b) => b.v - a.v);
     R.icms = S.icmsSai || null;
+    R.servSemTrib = S.servSemTrib || null;
   }
   return R;
 }
 
 /* --- várias análises abertas ao mesmo tempo (a 037 e a 047 da mesma empresa) --- */
-const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt'];
+const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt', 'servSemTrib'];
 S.analyses = {};
 function guardarAnalise() { if (!S.loaded) return; const snap = {}; for (const k of SNAP_KEYS) snap[k] = S[k]; S.analyses[S.tipo] = { snap }; }
 function ativarAnalise(tipo) {

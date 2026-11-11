@@ -42,7 +42,9 @@ function toNum(v) {
   if (typeof v === 'number') return isFinite(v) ? v : 0;
   let s = String(v).trim().replace(/[R$\s]/g, '');
   if (!s) return 0;
-  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const iv = s.lastIndexOf(','), ip = s.lastIndexOf('.');
+  if (iv >= 0 && ip > iv) s = s.replace(/,/g, '');                  // 1,234.56 (formato americano)
+  else if (iv >= 0) s = s.replace(/\./g, '').replace(',', '.');     // 1.234,56 ou 1234,56 (formato brasileiro)
   const n = parseFloat(s);
   return isFinite(n) ? n : 0;
 }

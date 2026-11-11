@@ -23,7 +23,7 @@ function lerICMS(headers, rows, files) {
   let ent = 0, sai = 0; for (const r of rows) { const c = String(r[I.cfop] || '').trim().charAt(0); if ('123'.includes(c) && c) ent++; else if ('567'.includes(c) && c) sai++; }
   const tipo = sai >= ent ? 'S' : 'E';
   const meses = new Map(), cte = new Map(); // ICMS de saída por mês (contexto) e CT-e candidatos por chave
-  const rec = new Map(), visto = new Set(), dev = new Map(), anul = new Map(), credPart = new Set(); // para os outros pontos (06g)
+  const rec = new Map(), visto = new Set(), dev = new Map(), anul = new Map(), credPart = new Set(), cred = new Map(); // para os outros pontos (06g)
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i], ym = ymDe(r[I.data]) || ymDe(r[I.per]); if (!ym) continue;
     const icms = toNum(r[I.icms]) || 0;
@@ -37,7 +37,8 @@ function lerICMS(headers, rows, files) {
     if (tipo === 'E' && /^[12]206$/.test(cf)) { // anulação de prestação de serviço de transporte
       const a = anul.get(chv) || { k: chv, ch: chv, ym, data: r[I.data], num: String(r[I.num] || '').trim(), part: digits(r[I.part]), nome: String(r[I.nome] || '').trim(), cfop: cf, op: 0, icms: 0, cf: new Set() };
       if (!a.cf.has(cf)) { a.cf.add(cf); a.op += vop; } a.icms += icms; anul.set(chv, a); }
-    if (tipo === 'E' && icms > 0 && /^[123]/.test(cf) && !/^[12]206$/.test(cf)) credPart.add(digits(r[I.part]));
+    if (tipo === 'E' && icms > 0 && /^[123]/.test(cf) && !/^[12]206$/.test(cf)) { credPart.add(digits(r[I.part]));
+      const x = cred.get(kop) || { k: kop, ym, data: r[I.data], num: String(r[I.num] || '').trim(), part: digits(r[I.part]), nome: String(r[I.nome] || '').trim(), cfop: cf, icms: 0 }; x.icms += icms; cred.set(kop, x); }
     if (tipo !== 'S' || icms <= 0) continue;
     const reg = String(r[I.reg] || ''), mod = String(r[I.modelo] || '').trim();
     if (!/^D100/i.test(reg) && mod !== '57' && mod !== '67') continue;           // só conhecimento de transporte
@@ -49,7 +50,7 @@ function lerICMS(headers, rows, files) {
     c.bc += toNum(r[I.bc]) || 0; c.icms += icms; c.linhas.push(i); cte.set(ch, c);
   }
   const cnpj = I.cnpj >= 0 ? (rows.map(r => digits(r[I.cnpj])).find(c => c.length >= 11) || '') : '';
-  return { tipo, headers, rows, I, meses, cte, files, cnpj, periodos: {}, ativo: {}, rec, dev: [...dev.values()], anul: [...anul.values()], credPart, exclOv: {}, devOv: {}, anulOv: {} };
+  return { tipo, headers, rows, I, meses, cte, files, cnpj, periodos: {}, ativo: {}, rec, dev: [...dev.values()], anul: [...anul.values()], credPart, cred: [...cred.values()], exclOv: {}, devOv: {}, anulOv: {} };
 }
 
 /* registro 0150 dos SPEDs da EFD ICMS/IPI (.txt): inscrição estadual de cada participante em cada mês */

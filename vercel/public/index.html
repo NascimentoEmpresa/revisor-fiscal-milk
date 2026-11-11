@@ -836,7 +836,9 @@ function toNum(v) {
   if (typeof v === 'number') return isFinite(v) ? v : 0;
   let s = String(v).trim().replace(/[R$\s]/g, '');
   if (!s) return 0;
-  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const iv = s.lastIndexOf(','), ip = s.lastIndexOf('.');
+  if (iv >= 0 && ip > iv) s = s.replace(/,/g, '');                  // 1,234.56 (formato americano)
+  else if (iv >= 0) s = s.replace(/\./g, '').replace(',', '.');     // 1.234,56 ou 1234,56 (formato brasileiro)
   const n = parseFloat(s);
   return isFinite(n) ? n : 0;
 }
@@ -1069,7 +1071,7 @@ const CST_DESC = {
 const CF = s => new Set(s.split(' '));
 const CFOP_REVENDA = CF('101 102 111 113 116 117 118 120 121 122 401 403 652');
 const CFOP_ST = CF('401 403');
-const CFOP_SEM_AQUISICAO = CF('151 152 153 154 408 409 552 557 901 902 903 904 905 906 907 908 909 910 911 912 913 914 915 916 917 918 919 920 921');
+const CFOP_SEM_AQUISICAO = CF('151 152 153 154 408 409 552 557 603 901 902 903 904 905 906 907 908 909 910 911 912 913 914 915 916 917 918 919 920 921');
 const CFOP_USO_CONSUMO = CF('556 407');
 const CFOP_ATIVO = CF('551 406');
 const CFOP_COMBUSTIVEL = CF('653');
@@ -1078,6 +1080,7 @@ const CFOP_FRETE = CF('351 352 353 354 355 356 360');
 const CFOP_COMUNIC = CF('301 302 303 304 305 306');
 const CFOP_DEVOLUCAO = CF('201 202 410 411');
 const CFOP_OUTRAS = CF('949');
+const CFOP_ENTREGA_FUTURA = CF('116 117 922');
 
 /* --- NCM: regras de partida. Fonte primária: a legislação citada. A base é da Milk: cada decisão do analista vira regra. --- */
 const NCM_RULES = [
@@ -1164,7 +1167,9 @@ function suggest(g, kb) {
     if (CFOP_REVENDA.has(c3)) return { cls: CLS.SEM, motivo: 'Monofásico na revenda: ' + nr.nome, lei: nr.lei + '; Lei 10.833/2003, art. 3º, I, "b"', conf: 'a', origem: 'NCM' };
     return { cls: CLS.AVA, motivo: nr.nome + ' para consumo próprio: crédito só se for insumo essencial ou relevante', lei: 'Lei 10.833/2003, art. 3º, II; REsp 1.221.170/PR', conf: 'b', origem: 'NCM' };
   }
+  if (nr && nr.t === 'ZERO' && nr.sai === 'AVA') return { cls: CLS.AVA, motivo: nr.nome + ': alíquota zero ' + (nr.obs || 'conforme o uso') + '. Confira pela descrição', lei: nr.lei, conf: 'b', origem: 'NCM' };
   if (nr && nr.t === 'ZERO') return { cls: CLS.SEM, motivo: 'Alíquota zero na aquisição: ' + nr.nome, lei: nr.lei + '; Lei 10.833/2003, art. 3º, § 2º, II', conf: 'a', origem: 'NCM' };
+  if (CFOP_ENTREGA_FUTURA.has(c3)) return { cls: CLS.AVA, motivo: 'Compra com entrega futura: o crédito é tomado uma vez só, no simples faturamento (1922/2922) ou na entrega (1116/1117). Confira para não duplicar', lei: 'Lei 10.833/2003, art. 3º, I', conf: 'b', origem: 'CFOP' };
   if (CFOP_REVENDA.has(c3)) {
     const st = CFOP_ST.has(c3) ? ' (o ICMS-ST não afasta o crédito de PIS/COFINS)' : '';
     const conf = (cst === '70' || cst === '98' || cst === '99' || cst === '') ? 'a' : 'm';
@@ -1178,7 +1183,7 @@ function suggest(g, kb) {
   if (CFOP_COMBUSTIVEL.has(c3)) return { cls: CLS.AVA, motivo: 'Combustível para consumo: crédito só se for insumo essencial ou relevante', lei: 'Lei 10.833/2003, art. 3º, II; REsp 1.221.170/PR', conf: 'b', origem: 'CFOP' };
   if (CFOP_USO_CONSUMO.has(c3)) return { cls: CLS.AVA, motivo: 'Uso e consumo: crédito só se for insumo essencial ou relevante à atividade', lei: 'REsp 1.221.170/PR; Parecer Normativo COSIT nº 5/2018', conf: 'b', origem: 'CFOP' };
   if (CFOP_COMUNIC.has(c3)) return { cls: CLS.SEM, motivo: 'Serviço de comunicação em estabelecimento comercial (não é insumo)', lei: 'Lei 10.833/2003, art. 3º, II', conf: 'm', origem: 'CFOP' };
-  if (CFOP_OUTRAS.has(c3)) return { cls: CLS.AVA, motivo: 'Outra entrada não especificada: verificar a natureza da operação', lei: '', conf: 'b', origem: 'CFOP' };
+  if (CFOP_OUTRAS.has(c3)) return { cls: CLS.SEM, motivo: 'Outra entrada não especificada (x949): em geral sem aquisição (comodato, conserto, bonificação, ajuste). Se for compra, mude para COM CREDITO', lei: 'Lei 10.833/2003, art. 3º (crédito sobre bens adquiridos)', conf: 'm', origem: 'CFOP' };
   return { cls: CLS.AVA, motivo: 'Sem regra para o CFOP ' + (g.cfop || '—') + ': análise manual', lei: '', conf: 'b', origem: 'Sem regra' };
 }
 
@@ -1738,7 +1743,7 @@ const S = {
   headers: [], hkey: [], map: {}, missing: [], hasAnoMes: false,
   tipo: 'ENT', recs: [], com: [], sem: [], alvo: [], groups: [], months: [], monthIdx: new Map(),
   totals: {}, regTable: [], checks: [], timings: [], procMs: 0,
-  settings: Object.assign({ excluirIcms: true, cidade: 'Montenegro', escritorio: 'Milk Advocacia', analista: '', minManualBase: 60, minManualGrupo: 2, minAssistGrupo: .5, minRelManual: 180, minRelAssist: 45 }, store.get(SET_KEY, {})),
+  settings: Object.assign({ excluirIcms: true, descontoItem: true, cidade: 'Montenegro', escritorio: 'Milk Advocacia', analista: '', minManualBase: 60, minManualGrupo: 2, minAssistGrupo: .5, minRelManual: 180, minRelAssist: 45 }, store.get(SET_KEY, {})),
   kb: store.get(KB_KEY, {}),
   ui: { view: 'painel', filter: 'todos', q: '', sort: 'valor', showN: 60, drawer: null }
 };
@@ -1761,7 +1766,12 @@ async function readWorkbook(file, prog) {
   if (typeof XLSX === 'undefined') throw new Error('A biblioteca de leitura de Excel não carregou. Verifique a conexão com a internet e recarregue a página.');
   const buf = await file.arrayBuffer();
   await tick();
-  const wb = XLSX.read(buf, { type: 'array', dense: true, cellDates: true, cellNF: false, cellText: false, cellHTML: false });
+  let wb;
+  if (/\.(csv|txt)$/i.test(file.name || '')) {
+    // CSV salvo pelo Excel (Windows-1252, ";") ou em UTF-8: decodifica aqui e lê tudo como texto (CNPJ, NCM e chave sem perder zeros nem dígitos)
+    let txt; try { txt = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { txt = new TextDecoder('windows-1252').decode(buf); }
+    wb = XLSX.read(txt.replace(/^\uFEFF/, ''), { type: 'string', raw: true, dense: true });
+  } else wb = XLSX.read(buf, { type: 'array', dense: true, cellDates: true, cellNF: false, cellText: false, cellHTML: false });
   // a aba com mais linhas e com as colunas esperadas
   let best = null;
   for (const name of wb.SheetNames) {
@@ -1805,6 +1815,7 @@ const kbKey = g => MODE.kbPrefix + (g.ncm || '-') + '|' + (g.cfop || '-');
 
 /* --- pipeline: cada etapa é medida e mostrada na tela --- */
 async function runPipeline(input, onStep) {
+  S.decPronto = false;
   const T = [];
   const step = async (id, label, fn) => {
     onStep && onStep({ id, label, state: 'run' }); await tick();
@@ -1951,15 +1962,45 @@ async function runPipeline(input, onStep) {
 
 /* --- classificação final e crédito potencial --- */
 const clsOf = r => r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null);
+/* base do crédito de um item da 037: Vlr Item, menos o desconto (opção) e o ICMS a partir de 05/2023 (opção) */
+const baseCredito = r => Math.max(0, r.vlrItem - (S.settings.descontoItem !== false ? r.vlrDesc : 0) - (S.settings.excluirIcms && r.ym >= 202305 ? r.vlrIcms : 0));
+/* itens ainda em AVALIAR: não entram no total até a analista decidir. v = crédito (ou valor a recuperar) se todos fossem decididos a favor */
+function avaliarPendente(a = S) {
+  const R = { n: 0, grupos: 0, vlr: 0, v: 0 }; if (!a.alvo) return R;
+  const AVA = MODES[a.tipo].cls.AVA, gs = new Set();
+  for (const r of a.alvo) {
+    const c = r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null); if (c !== AVA) continue;
+    R.n++; R.vlr += r.vlrItem || 0; if (r.g) gs.add(r.g);
+    if (a.tipo === 'SAI') R.v += (r.vlrPis || 0) + (r.vlrCof || 0);
+    else { const mo = a.monthIdx.get(r.ym); if (mo && mo.regime === 'NC') R.v += baseCredito(r) * 0.0925; }
+  }
+  R.grupos = gs.size; R.vlr = r2(R.vlr); R.v = r2(R.v); return R;
+}
 function creditOf(r) {
   if (clsOf(r) !== CLS.COM) return null;
   if (S.tipo === 'SAI') return { base: r2(r.bcPis), pis: r2(r.vlrPis), cof: r2(r.vlrCof) }; // saída tributada indevidamente: o que foi pago
   const mo = S.monthIdx.get(r.ym);
   if (!mo || mo.regime !== 'NC') return null;
-  const base = Math.max(0, r.vlrItem - r.vlrDesc - (S.settings.excluirIcms && r.ym >= 202305 ? r.vlrIcms : 0));
+  const base = baseCredito(r);
   return { base: r2(base), pis: r2(base * .0165), cof: r2(base * .076) };
 }
 
+/* decisões da analista por empresa (CNPJ) e planilha: voltam sozinhas se a mesma empresa for importada de novo neste navegador */
+const DEC_KEY = 'revisor-fiscal-decisoes-v1';
+function guardarDecisoes() {
+  const c = digits(S.empresa && S.empresa.cnpj || ''); if (!c || S.demo || !S.groups || !S.decPronto) return; // só depois de reaplicar as decisões guardadas
+  const all = store.get(DEC_KEY, {}), m = {}; let n = 0;
+  for (const g of S.groups) if (g.dec) { m[g.key] = g.dec; n++; }
+  const k = c + '|' + S.tipo; if (n) all[k] = { em: Date.now(), m }; else delete all[k];
+  try { store.set(DEC_KEY, all); } catch (e) { /* armazenamento cheio: segue sem guardar */ }
+}
+function reaplicarDecisoes() {
+  S.decPronto = true;
+  const c = digits(S.empresa && S.empresa.cnpj || ''); if (!c || S.demo || !S.groups) return 0;
+  const x = store.get(DEC_KEY, {})[c + '|' + S.tipo]; if (!x || !x.m) return 0;
+  let n = 0; for (const g of S.groups) { const d = x.m[g.key]; if (d && clsDoModo(d)) { g.dec = d; n++; } }
+  if (n) recompute(); return n;
+}
 function recompute() {
   S.months.forEach(m => { m.pot = 0; m.potBase = 0; m.potPis = 0; m.potCof = 0; });
   let pot = { base: 0, pis: 0, cof: 0, n: 0 };
@@ -1970,9 +2011,12 @@ function recompute() {
     pot.base += c.base; pot.pis += c.pis; pot.cof += c.cof; pot.n++;
     const y = byYear.get(r.ano) || { ano: r.ano, base: 0, pis: 0, cof: 0 }; y.base += c.base; y.pis += c.pis; y.cof += c.cof; byYear.set(r.ano, y);
   }
+  // 037: como a analista, 9,25% sobre a base total, arredondado uma vez (PIS 1,65% e COFINS o restante)
+  if (S.tipo !== 'SAI') { pot.base = r2(pot.base); const tot = r2(pot.base * .0925); pot.pis = r2(pot.base * .0165); pot.cof = r2(tot - pot.pis); }
   S.pot = pot; S.potYears = [...byYear.values()].sort((a, b) => a.ano - b.ano);
   S.checks = runChecks();
   S.resumo = buildResumo();
+  guardarDecisoes();
   if (S.analyses && S.analyses[S.tipo] && S.analyses[S.tipo].snap.recs === S.recs) S.analyses[S.tipo].snap.resumo = S.resumo;
   const g = S.groups;
   S.clsCount = { COM: 0, SEM: 0, AVA: 0, revisados: 0, vlrRev: 0 };
@@ -2204,6 +2248,20 @@ function runChecksSai() {
     txt: sr.n ? fNum(sr.n) + ' itens vendidos sem as contribuições (CST 04 a 09) em ' + sr.ncms.size + ' NCM que não constam nas regras do Revisor: base de ' + fBRL(sr.base) + '. Se forem produtos tributados, o débito não recolhido seria de cerca de ' + fBRL(sr.v) + '.' : 'Todas as vendas sem PIS/COFINS têm NCM com regra de monofásico ou alíquota zero.',
     acao: sr.n ? 'Conferir o enquadramento desses NCM (a lista de regras é um ponto de partida e não esgota a legislação).' : 'Nada a fazer.', rel: ''
   });
+  // 8b. receita de serviço (transporte CFOP 535x, NFS-e A100) sem PIS/COFINS: possível débito não recolhido
+  const ss = { n: 0, base: 0, v: 0, pis: 0, cof: 0, mi: 0, ma: 0, regs: new Set() };
+  for (const r of S.sem) {
+    const transp = /^[56]3(5[1-9]|60)$/.test(r.cfop || ''), serv = /^a1/i.test(r.registro);
+    if (!(transp || serv) || !['08', '09', '49', '99'].includes(r.cst) || !(r.vlrItem > 0)) continue;
+    const mo = S.monthIdx.get(r.ym), cum = mo && mo.regime === 'CUM', pis = r.vlrItem * (cum ? .0065 : .0165), cof = r.vlrItem * (cum ? .03 : .076);
+    ss.n++; ss.base += r.vlrItem; ss.pis += pis; ss.cof += cof; ss.v += pis + cof; ss.regs.add(r.registro.slice(0, 4)); if (!ss.mi || r.ym < ss.mi) ss.mi = r.ym; if (r.ym > ss.ma) ss.ma = r.ym;
+  }
+  S.servSemTrib = { n: ss.n, base: r2(ss.base), pis: r2(ss.pis), cof: r2(ss.cof), v: r2(ss.v), mi: ss.mi, ma: ss.ma, regs: [...ss.regs] };
+  add({
+    id: 'serv-sem-trib', t: 'Receita de serviço (transporte ou NFS-e) sem PIS/COFINS', st: ss.n ? 'risk' : 'ok', n: ss.n, v: ss.n ? r2(ss.v) : null,
+    txt: ss.n ? fNum(ss.n) + ' documentos de serviço (' + [...ss.regs].join(', ') + ', ' + ymLabel(ss.mi) + ' a ' + ymLabel(ss.ma) + ') com CST 08, 09, 49 ou 99, que contam no faturamento mas não foram tributados: base de ' + fBRL(ss.base) + '. PIS e COFINS não recolhidos: ' + fBRL(ss.v) + ' (pela alíquota do regime de cada mês).' : 'Toda a receita de serviço foi tributada.',
+    acao: ss.n ? 'Conferir a natureza dessas prestações; se forem tributadas, recolher a diferença (vai para o quadro geral como valor a recolher).' : 'Nada a fazer.', rel: ''
+  });
   // 9. vendas consolidadas (NFC-e/cupom) sem o produto: a revisão por NCM não alcança essas vendas
   const cons = S.com.filter(r => !r.ncm && REG_CONSOLIDADO.test(r.registro));
   if (cons.length) {
@@ -2234,7 +2292,7 @@ function buildResumo() {
   const anosReg = {};
   for (const m of S.months) { const a = anosReg[m.ano] || (anosReg[m.ano] = { NC: 0, CUM: 0, SEM: 0 }); a[m.regime]++; }
   const ult = [...S.months].reverse().find(m => m.regime !== 'SEM');
-  const R = { tipo: S.tipo, cnpj: S.empresa.cnpj, ini: S.months[0].ym, fim: S.months[S.months.length - 1].ym, faixas, anosReg, regimeAtual: ult ? ult.regime : null, pot: { base: r2(S.pot.base), pis: r2(S.pot.pis), cof: r2(S.pot.cof) } };
+  const R = { ava: avaliarPendente(), tipo: S.tipo, cnpj: S.empresa.cnpj, ini: S.months[0].ym, fim: S.months[S.months.length - 1].ym, faixas, anosReg, regimeAtual: ult ? ult.regime : null, pot: { base: r2(S.pot.base), pis: r2(S.pot.pis), cof: r2(S.pot.cof) } };
   if (S.tipo === 'ENT') {
     const porNcm = new Map();
     for (const r of S.alvo) { const c = creditOf(r); if (!c) continue; const k = r.ncm || '-'; let x = porNcm.get(k); if (!x) porNcm.set(k, x = { ncm: r.ncm, desc: r.desc, base: 0, pis: 0, cof: 0, n: 0 }); x.base += c.base; x.pis += c.pis; x.cof += c.cof; x.n++; }
@@ -2255,12 +2313,13 @@ function buildResumo() {
     for (const g of S.groups) { if ((g.dec || g.sug.cls) !== CLS.COM || (g.dec && g.dec !== g.sug.cls) || !/Alíquota zero|Monofásico/.test(g.sug.cat || '') || !g.ncm) continue; const k = g.ncm, nr = ncmRule(g.ncm); const x = zm.get(k) || { ncm: g.ncm, nome: nr ? nr.nome : g.descTop, v: 0 }; x.v += g.vlr; zm.set(k, x); }
     R.zeroNcms = [...zm.values()].sort((a, b) => b.v - a.v);
     R.icms = S.icmsSai || null;
+    R.servSemTrib = S.servSemTrib || null;
   }
   return R;
 }
 
 /* --- várias análises abertas ao mesmo tempo (a 037 e a 047 da mesma empresa) --- */
-const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt'];
+const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt', 'servSemTrib'];
 S.analyses = {};
 function guardarAnalise() { if (!S.loaded) return; const snap = {}; for (const k of SNAP_KEYS) snap[k] = S[k]; S.analyses[S.tipo] = { snap }; }
 function ativarAnalise(tipo) {
@@ -2745,7 +2804,7 @@ async function buildWorkbook(onProgress) {
           const ok = cCls + row + '="' + CLS.COM + '"';
           fB = 'IF(' + ok + ',' + SL('bcPis') + row + ',0)'; fP = 'IF(' + ok + ',' + SL('vlrPis') + row + ',0)'; fC = 'IF(' + ok + ',' + SL('vlrCof') + row + ',0)';
         } else {
-          fB = 'IF(AND(' + cCls + row + '="' + CLS.COM + '",' + cReg + row + '="NÃO CUMULATIVO"),MAX(0,N(' + cItem + row + ')' + (cDesc ? '-N(' + cDesc + row + ')' : '') + (cIcms && (cMes || cPer) ? '-IF(AND(ExcluirICMS,' + desde0523(row) + '),N(' + cIcms + row + '),0)' : '') + '),0)';
+          fB = 'IF(AND(' + cCls + row + '="' + CLS.COM + '",' + cReg + row + '="NÃO CUMULATIVO"),MAX(0,N(' + cItem + row + ')' + (cDesc ? '-IF(DescontarDesconto,N(' + cDesc + row + '),0)' : '') + (cIcms && (cMes || cPer) ? '-IF(AND(ExcluirICMS,' + desde0523(row) + '),N(' + cIcms + row + '),0)' : '') + '),0)';
           fP = 'ROUND(' + cBase + row + '*1.65%,2)'; fC = 'ROUND(' + cBase + row + '*7.6%,2)';
         }
         cells.push(by ? by.motivo : 'Decisão do analista', by ? by.lei : '', by ? CONF[by.conf] : '—', rec.ov || g.dec ? 'Analista' : sug.origem, regTxt(mo),
@@ -2847,9 +2906,13 @@ async function buildWorkbook(onProgress) {
       emit([null, T_('Crédito potencial — PIS', 'Valor a recuperar — PIS'), { v: r2(S.pot.pis), f: AQ + 'D' + caTot, s: XS.brlB }]);
       emit([null, T_('Crédito potencial — COFINS', 'Valor a recuperar — COFINS'), { v: r2(S.pot.cof), f: AQ + 'E' + caTot, s: XS.brlB }]);
       emit([null, T_('Crédito potencial — total', 'Valor a recuperar — total'), { v: r2(potT), f: 'C12+C13', s: XS.brlB }]);
+      const pend = avaliarPendente();
+      if (pend.n) emit([null, { v: T_('Em AVALIAR, ainda fora do total: ', 'Em AVALIAR, ainda fora do total: ') + fNum(pend.n) + ' itens em ' + fNum(pend.grupos) + ' grupos (Vlr Item ' + fBRL(pend.vlr) + '). ' + T_('Se forem COM CREDITO, o crédito sobe até ', 'Se forem RECUPERAR, o valor sobe até ') + fBRL(pend.v) + '.', s: XS.txtB }]);
       if (!sai) {
         const exRow = emit([null, 'Excluir ICMS da base do crédito a partir de 05/2023 (Lei 14.592/2023)', { v: !!S.settings.excluirIcms, s: XS.bold }]);
         B.names.push({ name: 'ExcluirICMS', ref: 'RESUMO!$C$' + exRow });
+        const dsRow = emit([null, 'Descontar o Vlr Desconto Item da base do crédito', { v: S.settings.descontoItem !== false, s: XS.bold }]);
+        B.names.push({ name: 'DescontarDesconto', ref: 'RESUMO!$C$' + dsRow });
         emit([null, { v: 'Altere para VERDADEIRO/FALSO: a aba CRÉDITO APURADO recalcula. Na aba NOTAS SEM PC, mude a coluna CLASSIF. e o crédito se atualiza.', s: XS.note }]);
       } else emit([null, { v: 'Na aba ITENS A RECUPERAR (vendas marcadas RECUPERAR ou AVALIAR), mude a coluna CLASSIF. e a aba VALOR A RECUPERAR se atualiza.', s: XS.note }]);
       emit([]);
@@ -2897,7 +2960,8 @@ async function buildWorkbook(onProgress) {
         emit([{ v: a, s: XS.bold }, { v: 'Total ' + a, s: XS.bold }, { v: r2(y.base), f: 'SUM(C' + r0 + ':C' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.pis), f: 'SUM(D' + r0 + ':D' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.cof), f: 'SUM(E' + r0 + ':E' + (row - 1) + ')', s: XS.brlB }, { v: r2(y.pis + y.cof), f: 'SUM(F' + r0 + ':F' + (row - 1) + ')', s: XS.brlB }]);
       }
       const row = first;
-      emit([{ v: 'Total geral', s: XS.txtB }, { v: '', s: XS.txtB }, { v: r2(S.pot.base), f: 'SUMIFS(C4:C' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis), f: 'SUMIFS(D4:D' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.cof), f: 'SUMIFS(E4:E' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis + S.pot.cof), f: 'SUMIFS(F4:F' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }]);
+      emit([{ v: 'Total geral', s: XS.txtB }, { v: '', s: XS.txtB }, { v: r2(S.pot.base), f: 'SUMIFS(C4:C' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")', s: XS.brlTot }, { v: r2(S.pot.pis), f: sai ? 'SUMIFS(D4:D' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'ROUND(C' + row + '*1.65%,2)', s: XS.brlTot }, { v: r2(S.pot.cof), f: sai ? 'SUMIFS(E4:E' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'ROUND(C' + row + '*9.25%,2)-D' + row, s: XS.brlTot }, { v: r2(S.pot.pis + S.pot.cof), f: sai ? 'SUMIFS(F4:F' + (row - 1) + ',B4:B' + (row - 1) + ',"Total*")' : 'D' + row + '+E' + row, s: XS.brlTot }]);
+      if (!sai) emit([{ v: 'Total geral = base × 9,25% (PIS 1,65% e COFINS o restante), arredondado uma vez no total, como na planilha da equipe. Os meses e anos somam item a item e podem diferir em centavos.', s: XS.note }]);
     }
   });
 
@@ -3318,7 +3382,7 @@ async function preencherModelo(bytes, d) {
   const ncAnos = Object.keys(anosReg).map(Number).filter(a => anosReg[a].NC > 0 && anosReg[a].NC >= anosReg[a].CUM).sort();
 
   // valores do quadro final
-  const linhaE = R.ENT ? { t: 'C100 Notas lançadas sem Créditos', ...R.ENT.pot } : null;
+  const vE = R.ENT ? (d.entQ || R.ENT.pot) : null, linhaE = vE && (vE.pis + vE.cof > 0 || !(d.geral && d.geral.rec.length)) ? { t: 'C100 Notas lançadas sem Créditos', ...vE } : null;
   const icm = R.SAI && R.SAI.icms && R.SAI.icms.n && !R.SAI.icms.residual ? R.SAI.icms : null;
   const linhaI = icm ? { t: 'Exclusão do ICMS da BC Pis/Cofins', base: icm.base, pis: icm.pis, cof: icm.cof } : d.excl ? { t: 'Exclusão do ICMS da BC Pis/Cofins', ...d.excl } : null;
   const linhaA = d.anul ? { t: 'Crédito não apropriado - anulações de CT-e', ...d.anul } : null;
@@ -3329,6 +3393,7 @@ async function preencherModelo(bytes, d) {
   const linhaD = d.ecd ? { t: 'Créditos - ECD', ...d.ecd } : null;
   const linhas = [linhaE, linhaN, linhaD, linhaI, linhaA, linhaZ, linhaO].filter(Boolean);
   const totalGeral = r2(linhas.reduce((a, l) => a + l.pis + l.cof, 0));
+  const comGeral = !!(d.geral && (d.geral.rec.some(x => x.bloco !== 'PIS/COFINS') || d.geral.recolher.length)), totConcl = comGeral ? d.geral.totRec : totalGeral; // com ICMS no quadro geral, a conclusão fala do total a recuperar
 
   const temRegime = !!(R.ENT || R.SAI);
   for (let i = ps.length - 1; i >= 0; i--) {
@@ -3393,7 +3458,7 @@ async function preencherModelo(bytes, d) {
       relat.feitos.push('Crédito indevido em uso e consumo'); ok = true;
     }
     // total da conclusão
-    if (linhas.length && (q = DX.replaceRe(p, /(identifica[çc][ãa]o do montante de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(totalGeral)))) { p = q; relat.feitos.push('Total da conclusão'); ok = true; }
+    if (linhas.length && (q = DX.replaceRe(p, /(identifica[çc][ãa]o do montante de )R\$\s*[\d.]+,\d{2}/i, m => m[1] + fBRL(totConcl)))) { p = q; relat.feitos.push('Total da conclusão' + (comGeral ? ' (total a recuperar do quadro geral)' : '')); ok = true; }
     if (ok && p) p = p.replace(/<w:highlight w:val="[^"]*"\/>/g, '');
 
     // imagens
@@ -3420,15 +3485,16 @@ async function preencherModelo(bytes, d) {
         (linhaD ? '' : '<w:p>' + DX.pPr(p) + DX.hlRun('Acrescentar ao quadro os créditos levantados na ECD (energia elétrica, fretes, depreciação), se houver.', DX.rPr(p)) + '</w:p>');
       // quadro geral (BLOCO, DESCRIÇÃO, PERÍODO, VALOR), como no diagnóstico da MAXXI: quando há ICMS ou valores a recolher
       const G = d.geral;
-      if (G && (G.rec.some(x => x.bloco !== 'PIS/COFINS') || G.recolher.length)) {
+      if (comGeral) {
         const cg = [{ h: 'BLOCO', w: 1300 }, { h: 'DESCRIÇÃO', w: 4300 }, { h: 'PERÍODO', w: 1800 }, { h: 'VALOR (R$)', w: 1700, right: true }];
         const rr = l => [l.bloco, l.desc, l.per, fBRL(l.v)], vazio = '<w:p>' + DX.pPr(pOrig) + '</w:p>';
         p += vazio + dxTabela(cg, G.rec.map(rr).concat([['', 'TOTAL A RECUPERAR', '', fBRL(G.totRec)]]), { totalLast: true }) +
           (G.recolher.length ? vazio + dxTabela(cg, G.recolher.map(rr).concat([['', 'TOTAL A RECOLHER', '', fBRL(G.totRecolher)]]), { totalLast: true }) : '') +
-          '<w:p>' + DX.pPr(pOrig) + DX.hlRun('Conferir o quadro geral e acrescentar os pontos fora do SistemaMA (valores não recolhidos, créditos a estornar, PER/DCOMP).', DX.rPr(pOrig)) + '</w:p>';
+          '<w:p>' + DX.pPr(pOrig) + DX.hlRun('Conferir o quadro geral e acrescentar os pontos que não vêm do SistemaMA (PER/DCOMP, retenções, consultas na SEFAZ).', DX.rPr(pOrig)) + '</w:p>';
         relat.feitos.push('Quadro geral a recuperar e a recolher (' + G.rec.length + ' + ' + G.recolher.length + ' linhas)');
         relat.pendentes.push('Conferir o quadro geral (pontos fora do SistemaMA)');
       }
+      for (const [k, r] of [['037', R.ENT], ['047', R.SAI]]) if (r && r.ava && r.ava.n) relat.pendentes.push(r.ava.grupos + ' grupos da ' + k + ' em AVALIAR ficaram fora do quadro (até ' + fBRL(r.ava.v) + ')');
       relat.feitos.push('Quadro-resumo dos valores' + (linhaN ? ' (com as notas não escrituradas da Junção 513)' : '') + (linhaD ? ' (com os créditos da ECD)' : ''));
       if (!linhaD) relat.pendentes.push('Créditos da ECD no quadro-resumo (energia, fretes, depreciação)');
     }
@@ -3496,7 +3562,7 @@ const modeloBytes = () => (S.modelo && S.modelo.bytes) || modeloPadrao();
 function dadosModelo() {
   const X = extrasDaEmpresa(), Q = quadroResumo();
   return { nome: S.empresa.nome, cnpj: S.empresa.cnpj, cidade: S.settings.cidade, ent: resumoDe('ENT'), sai: resumoDe('SAI'), logoCliente: S.logoCliente || null,
-    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, geral: quadroGeral(),
+    j513: X.j513 ? Q.L.find(l => l.k === 'j513').v : null, ecd: Q.L.find(l => l.k === 'ecd').v, geral: quadroGeral(), entQ: (l => l && l.v)(Q.L.find(l => l.k === 'ent')),
     excl: (l => l && l.v && /070 x 047/.test(l.t) && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'icms')), anul: (l => l && l.v && (l.v.pis + l.v.cof) > 0 ? l.v : null)(Q.L.find(l => l.k === 'anul')), ecf: X.ecf ? { apur: textoApuracao(X.ecf), trib: tribAtualECF(X.ecf) } : null };
 }
 
@@ -3519,7 +3585,7 @@ function tipoExtra(hk) {
   if (hk.includes('cst icms') && hk.includes('indicador emitente') && hk.includes('uf origem destino') && hk.includes('vlr icms')) return 'ICMS';
   return null;
 }
-const EXTRA_NOME = { J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
+const EXTRA_NOME = { REPETIDO: 'Repetido: lido uma vez só', J513: 'Junção 513 · EFD ICMS × Contribuições', ECF: 'ECF 0000/0010 · Parâmetros de tributação', ECD: 'ECD · I200/I250 Partidas de lançamento', ICMS: 'EFD ICMS/IPI · 069/070', SPED: 'SPED EFD ICMS/IPI · 0150' };
 
 /* ano-mês (aaaamm) de uma data em texto dd/mm/aaaa, Date ou número de série do Excel */
 function ymDe(v) {
@@ -3772,8 +3838,11 @@ function quadroResumo() {
   const icm = Sa && Sa.icms && Sa.icms.n && !Sa.icms.residual ? Sa.icms : null;
   // ECD importada: calculada conta a conta; sem ela, a base que a analista informar
   const ecd = X.ecdA ? { base: X.ecdA.res.base, pis: X.ecdA.res.pis, cof: X.ecdA.res.cof } : X.ecd && X.ecd.base > 0 ? { base: r2(X.ecd.base), pis: r2(X.ecd.base * CRED_PIS), cof: r2(X.ecd.base * CRED_COF) } : null;
+  // 037 x ECD: a nota sem crédito da 037 numa conta que a ECD já inclui está dentro da diferença da ECD (não somar duas vezes)
+  const dup = sobreposicao037ECD(X);
+  const ent = E ? (dup.base > 0 ? { base: r2(E.pot.base - dup.base), pis: r2(E.pot.pis - dup.pis), cof: r2(E.pot.cof - dup.cof) } : E.pot) : null;
   const L = [
-    { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)', v: E ? E.pot : null, falta: 'importe a 037' },
+    { k: 'ent', t: 'Notas lançadas sem PIS/COFINS (037)' + (dup.base > 0 ? ' — sem ' + fBRL(dup.pis + dup.cof) + ' já contados na ECD' : ''), v: ent, falta: 'importe a 037', dup },
     { k: 'j513', t: 'Notas não escrituradas no EFD-Contribuições (Junção 513)', v: j && (j.pis + j.cof) > 0 ? { base: j.base, pis: j.pis, cof: j.cof } : j ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a Junção 513' },
     { k: 'ecd', t: 'Créditos da ECD (diferença ECD x 037)', v: ecd, falta: 'importe a ECD ou informe a base abaixo' },
     { k: 'icms', t: 'Exclusão do ICMS da base do PIS/COFINS (047)', v: icm ? { base: icm.base, pis: icm.pis, cof: icm.cof } : Sa ? { base: 0, pis: 0, cof: 0 } : null, falta: 'importe a 047', per: icm ? ymFaixa(icm.mi, icm.ma) : '' }
@@ -3781,10 +3850,27 @@ function quadroResumo() {
   // sem ICMS por item na 047 (transportadora com D200, por exemplo): a comparação mês a mês com a 070
   const ex = !(Sa && Sa.icms && Sa.icms.comIcms) ? analisarExclusao() : null;
   if (ex && ex.com047 && ex.n) Object.assign(L[3], { t: 'Exclusão do ICMS da base do PIS/COFINS (070 x 047, por mês)', v: { base: ex.base, pis: ex.pis, cof: ex.cof }, per: ymFaixa(ex.mi, ex.ma) });
+  // 047: PIS/COFINS pagos sobre vendas que não deveriam ser tributadas (alíquota zero, monofásico, ativo...), como no Word
+  if (Sa && Sa.cats && Sa.cats.length) { const v = Sa.cats.reduce((a, c) => ({ base: a.base + c.base, pis: a.pis + c.pis, cof: a.cof + c.cof }), { base: 0, pis: 0, cof: 0 }); L.push({ k: 'sai', t: 'PIS/COFINS pagos sobre vendas não tributáveis (047)', v: { base: r2(v.base), pis: r2(v.pis), cof: r2(v.cof) } }); }
   const an = analisarAnulacoes();
   if (an) L.push({ k: 'anul', t: 'Crédito não apropriado – anulações 1206/2206 (069)', v: { base: an.base, pis: an.pis, cof: an.cof }, per: an.n ? ymFaixa(an.mi, an.ma) : '' });
   const tot = L.reduce((a, l) => { if (l.v) { a.base += l.v.base; a.pis += l.v.pis; a.cof += l.v.cof; } return a; }, { base: 0, pis: 0, cof: 0 });
   return { L, tot: { base: r2(tot.base), pis: r2(tot.pis), cof: r2(tot.cof) } };
+}
+
+function sobreposicao037ECD(X) {
+  const R = { base: 0, pis: 0, cof: 0, n: 0 }, e = X.ecdA, a = anaENT();
+  if (!e || !a || !a.map || a.map.contaCtb == null) return R;
+  const sim = new Set([...e.contas.values()].filter(c => c.despesa && c.valor && clsConta(c) === ECD_CLS.SIM).map(c => c.conta));
+  const COM = MODES.ENT.cls.COM;
+  for (const r of a.alvo) {
+    const c = r.ov || (r.g ? (r.g.dec || r.g.sug.cls) : null); if (c !== COM) continue;
+    if (!sim.has(String(r.v[a.map.contaCtb] == null ? '' : r.v[a.map.contaCtb]).trim()) || !e.anosEscopo.includes(r.ano)) continue;
+    const mo = a.monthIdx.get(r.ym); if (!mo || mo.regime !== 'NC') continue;
+    const b = baseCredito(r);
+    R.base += b; R.pis += r2(b * 0.0165); R.cof += r2(b * 0.076); R.n++;
+  }
+  R.base = r2(R.base); R.pis = r2(R.pis); R.cof = r2(R.cof); return R;
 }
 
 function viewOutras() {
@@ -3872,7 +3958,7 @@ function cardECD(e) {
   const opts = [ECD_CLS.SIM, ECD_CLS.AVA, ECD_CLS.NAO], k = c => clsConta(c) === ECD_CLS.SIM ? 'COM' : clsConta(c) === ECD_CLS.AVA ? 'AVA' : 'SEM';
   const linha = c => '<tr><td class="mono small">' + esc(c.conta) + '</td><td><div>' + esc(c.desc) + '</div><div class="small muted">' + esc(c.ov ? 'Decisão do analista' : c.cat) + (c.jaDe.length ? ' · já utilizado: ' + esc(c.jaDe.join(', ')) : '') + '</div></td>' +
     '<td><select class="cls-select ' + k(c) + '" data-ecd="' + esc(c.conta) + '" aria-label="Incluir a conta ' + esc(c.desc) + '">' + opts.map(o => '<option' + (o === clsConta(c) ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></td>' +
-    '<td class="n">' + fBRL(c.valor) + '</td><td class="n">' + fBRL(c.ja) + '</td><td class="n"><b>' + fBRL(c.valor - c.ja) + '</b></td></tr>';
+    '<td class="n">' + fBRL(c.valor) + (clsConta(c) === ECD_CLS.SIM ? '<div><input type="text" inputmode="decimal" class="mono small" style="width:120px;text-align:right" data-ecd-aj="' + esc(c.conta) + '" value="' + (c.ajuste != null ? NUM2.format(c.ajuste) : '') + '" placeholder="valor considerado" aria-label="Valor considerado da conta ' + esc(c.desc) + '" title="Se você tirou lançamentos desta conta (ex.: serviços de pessoa física), informe o valor que fica"></div>' : '') + '</td><td class="n">' + fBRL(c.ja) + '</td><td class="n"><b>' + fBRL((c.ajuste != null ? c.ajuste : c.valor) - c.ja) + '</b>' + (c.ajuste != null ? '<div class="small muted">valor ajustado</div>' : '') + '</td></tr>';
   const contasOpt = [...e.contas.values()].filter(c => c.despesa && c.valor).sort((a, b) => a.desc.localeCompare(b.desc, 'pt-BR'));
   const sem = e.semConta.length ? '<div style="margin-top:14px"><b class="small">Créditos da 037 em contas fora da tabela</b><p class="small muted">Não entram no já utilizado. Se correspondem a uma conta da ECD, escolha qual.</p><div class="tbl-wrap"><table><thead><tr><th>Conta na 037</th><th class="n">Base do PIS</th><th>Somar no já utilizado de</th></tr></thead><tbody>' +
     e.semConta.map(s => '<tr><td>' + esc(s.conta.startsWith('#') ? s.nome : s.conta + (s.nome ? ' · ' + s.nome : '')) + '</td><td class="n">' + fBRL(s.base) + '</td><td><select data-ecd-atrib="' + esc(s.conta) + '"><option value="">— nenhuma —</option>' + contasOpt.map(c => '<option value="' + esc(c.conta) + '"' + (s.atrib === c.conta ? ' selected' : '') + '>' + esc(c.desc) + '</option>').join('') + '</select></td></tr>').join('') + '</tbody></table></div></div>' : '';
@@ -3923,6 +4009,8 @@ function bindOutras() {
     if (s) { const j = S.extras.j513, n = j.notas.find(x => x.i === +s.dataset.j); if (!n) return; n.ov = s.value === n.sug.cls ? null : s.value; recalcJ513(j); refreshOutras(); toast('Nota ' + n.num + ': ' + s.value + '.'); return; }
     const ec = e.target.closest('select[data-ecd]');
     if (ec) { const c = S.extras.ecdA.contas.get(ec.dataset.ecd); c.ov = ec.value === c.sug ? null : ec.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
+    const aj = e.target.closest('input[data-ecd-aj]');
+    if (aj) { const c = S.extras.ecdA.contas.get(aj.dataset.ecdAj), t = aj.value.trim(); c.ajuste = t ? r2(toNum(t)) : null; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     const at = e.target.closest('select[data-ecd-atrib]');
     if (at) { S.extras.ecdA.atrib[at.dataset.ecdAtrib] = at.value; analisarECD(S.extras.ecdA); refreshOutras(); return; }
     const ie = e.target.closest('input[data-ie]');
@@ -3993,7 +4081,8 @@ const ECD_REGRAS = [
   { re: /telefon|internet|comunica[cç]|correio|material de escrit|honor[aá]rios cont|advocat|consultoria|propaganda|publicidade|marketing|viagens?|hospedag|representa[cç]/, cat: 'Despesas administrativas e comerciais', cls: 'NAO' },
   // hipóteses expressas do art. 3º
   { re: /energia el[eé]tric|energia\b|luz e for[cç]a/, cat: 'Energia elétrica (art. 3º, III)', cls: 'SIM' },
-  { re: /alugu[eé]l|loca[cç][aã]o de (pr[eé]dio|im[oó]v|m[aá]quina|equip|ve[ií]cul)|arrendamento mercantil|leasing/, cat: 'Aluguéis e arrendamento (art. 3º, IV e V)', cls: 'SIM' },
+  { re: /arrendamento mercantil|leasing/, cat: 'Arrendamento mercantil (art. 3º, V)', cls: 'SIM' },
+  { re: /alugu[eé]l|loca[cç][aã]o de (pr[eé]dio|im[oó]v|m[aá]quina|equip|ve[ií]cul)/, cat: 'Aluguéis (art. 3º, IV): só dá crédito se pago a pessoa jurídica', cls: 'AVA' },
   { re: /deprecia|amortiza/, cat: 'Depreciação e amortização (art. 3º, VI e VII)', cls: 'SIM' },
   { re: /combust[ií]v|lubrific|diesel|gasolina|[oó]leo/, cat: 'Combustíveis e lubrificantes (art. 3º, II)', cls: 'SIM' },
   { re: /frete|carreto|armazenag|transporte de (carga|mercad)/, cat: 'Fretes e armazenagem (art. 3º, IX)', cls: 'SIM' },
@@ -4048,13 +4137,16 @@ function mesesNC() {
 function jaUtilizado037() {
   const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap);
   if (!a || !a.recs || !a.map || a.map.contaCtb == null) return null;
-  const P = new Map(), iN = a.map.nomeCtb;
+  const P = new Map(), iN = a.map.nomeCtb, iNat = a.hkey ? a.hkey.indexOf('natureza credito') : -1;
   for (const r of a.recs) {
     if (!((r.vlrPis || 0) > 0)) continue;
     const ativo = /^F1[23]0/.test(r.registro);
     const k = ativo ? '#ATIVO' : String(r.v[a.map.contaCtb] == null ? '' : r.v[a.map.contaCtb]).trim() || '#SEM';
     const p = P.get(k) || { conta: k, nome: ativo ? 'Bens do ativo imobilizado (F120/F130)' : (iN != null ? String(r.v[iN] || '').trim() : ''), base: 0, n: 0, anos: new Map() };
     p.base += r.bcPis || 0; p.n++; p.anos.set(r.ano, (p.anos.get(r.ano) || 0) + (r.bcPis || 0)); P.set(k, p);
+    // natureza do crédito (04 energia, 09/10/11 ativo...): serve quando a conta da 037 não existe na ECD (ex.: conta "GERAL")
+    const nat = iNat >= 0 ? String(r.v[iNat] || '').trim().slice(0, 2) : '';
+    if (!p.nats) p.nats = new Map(); const pn = p.nats.get(nat) || new Map(); pn.set(r.ano, (pn.get(r.ano) || 0) + (r.bcPis || 0)); p.nats.set(nat, pn);
   }
   return P;
 }
@@ -4074,14 +4166,20 @@ function analisarECD(e) {
   }
   // já utilizado: mesma conta contábil; bens do ativo na conta de depreciação; as demais, como a analista atribuir
   e.semConta = [];
-  if (ja) for (const p of ja.values()) {
+  const NAT_ALVO = { '04': /energia|luz e for/i, '05': /alugu|loca[cç]/i, '06': /alugu|loca[cç]/i, '08': /arrendamento|leasing/i, '07': /frete|carreto|armazen/i, '14': /frete|carreto|transporte/i, '09': /deprecia/i, '10': /deprecia/i, '11': /deprecia|amortiza/i };
+  const contaNat = nat => { const re = NAT_ALVO[nat]; if (!re) return null; return [...e.contas.values()].filter(c => re.test(c.desc) && c.despesa && clsConta(c) !== ECD_CLS.NAO).sort((a, b) => b.valor - a.valor)[0] || null; };
+  if (ja) for (const p0 of ja.values()) {
+    // conta da 037 que não existe na ECD: reparte pela natureza do crédito, sem decisão manual
+    const parts = p0.conta !== '#ATIVO' && !e.contas.has(p0.conta) && !(e.atrib[p0.conta] != null) && p0.nats && p0.nats.size ? [...p0.nats].map(([nat, anos]) => ({ conta: p0.conta + (nat ? ' · natureza ' + nat : ''), nome: p0.nome, n: p0.n, anos, nat, porNat: contaNat(nat) })) : [p0];
+    for (const p of parts) {
     let base = 0; for (const [ano, v] of p.anos) if (e.anosEscopo.includes(ano)) base += v;
     if (!base) continue;
     const manual = e.atrib[p.conta] != null && e.atrib[p.conta] !== '';
-    let alvo = manual ? e.contas.get(e.atrib[p.conta]) : e.atrib[p.conta] === '' ? null : p.conta === '#ATIVO' ? depr : e.contas.get(p.conta);
+    let alvo = manual ? e.contas.get(e.atrib[p.conta]) : e.atrib[p.conta] === '' ? null : p.conta === '#ATIVO' ? depr : p.porNat !== undefined ? p.porNat : e.contas.get(p.conta);
     if (alvo && !manual && (!alvo.despesa || clsConta(alvo) === ECD_CLS.NAO)) alvo = null; // conta de receita ou fora da análise: a analista decide
-    if (alvo) { alvo.ja = r2(alvo.ja + base); alvo.jaDe.push(p.conta === '#ATIVO' ? 'bens do ativo (F120)' : 'conta ' + p.conta); }
+    if (alvo) { alvo.ja = r2(alvo.ja + base); alvo.jaDe.push(p.conta === '#ATIVO' ? 'bens do ativo (F120)' : p.porNat !== undefined ? 'natureza ' + p.nat + ' da 037' : 'conta ' + p.conta); }
     if (!alvo || manual) e.semConta.push({ conta: p.conta, nome: p.nome, base: r2(base), n: p.n, atrib: e.atrib[p.conta] });
+    }
   }
   recalcECD(e);
   return e;
@@ -4094,7 +4192,7 @@ function recalcECD(e) {
     const cls = clsConta(c);
     if (cls === ECD_CLS.AVA) R.ava++;
     if (cls !== ECD_CLS.SIM) continue;
-    R.sim++; R.valor += c.valor; R.ja += c.ja; R.dif += c.valor - c.ja; // como a analista: a diferença negativa também entra no total
+    const v = c.ajuste != null ? c.ajuste : c.valor; R.sim++; R.valor += v; R.ja += c.ja; R.dif += v - c.ja; // como a analista: a diferença negativa também entra no total
   }
   R.valor = r2(R.valor); R.ja = r2(R.ja); R.dif = r2(R.dif);
   // como a analista: 9,25% de uma vez sobre a diferença; o PIS é 1,65% e a COFINS o restante (fecha no centavo)
@@ -4116,7 +4214,7 @@ async function buildWorkbookECD(onProgress) {
       emit([{ v: 'ECD (I200/I250): débitos normais das contas de despesa em ' + anosTxt + ' (sem o encerramento). Já utilizado: base do PIS das notas com crédito da 037 na mesma conta (bens do ativo na depreciação). Fonte: ' + e.files.join(', '), s: XS.note }]);
       emit([]);
       const h0 = emit(['Rótulos de Linha', 'Soma de Vlr Partida', 'já utilizado', 'diferença', 'origem do já utilizado'], { s: XS.headG });
-      for (const c of sel) { const row = emit.proxima(); emit([c.desc, { v: c.valor, s: XS.brl }, { v: c.ja, s: XS.brl }, { v: r2(c.valor - c.ja), f: 'B' + row + '-C' + row, s: XS.brl }, c.jaDe.join(', ') || '—']); }
+      for (const c of sel) { const row = emit.proxima(), v = c.ajuste != null ? c.ajuste : c.valor; emit([c.desc, { v, s: XS.brl }, { v: c.ja, s: XS.brl }, { v: r2(v - c.ja), f: 'B' + row + '-C' + row, s: XS.brl }, (c.jaDe.join(', ') || '—') + (c.ajuste != null ? ' · valor ajustado pela analista (na ECD: ' + fBRL(c.valor) + ')' : '')]); }
       const tr = emit.proxima();
       emit([{ v: 'Total Geral', s: XS.txtB }, { v: R.valor, f: 'SUM(B' + (h0 + 1) + ':B' + (tr - 1) + ')', s: XS.brlB }, { v: R.ja, f: 'SUM(C' + (h0 + 1) + ':C' + (tr - 1) + ')', s: XS.brlB }, { v: R.dif, f: 'SUM(D' + (h0 + 1) + ':D' + (tr - 1) + ')', s: XS.brlB }]);
       emit([]);
@@ -4184,7 +4282,7 @@ function lerICMS(headers, rows, files) {
   let ent = 0, sai = 0; for (const r of rows) { const c = String(r[I.cfop] || '').trim().charAt(0); if ('123'.includes(c) && c) ent++; else if ('567'.includes(c) && c) sai++; }
   const tipo = sai >= ent ? 'S' : 'E';
   const meses = new Map(), cte = new Map(); // ICMS de saída por mês (contexto) e CT-e candidatos por chave
-  const rec = new Map(), visto = new Set(), dev = new Map(), anul = new Map(), credPart = new Set(); // para os outros pontos (06g)
+  const rec = new Map(), visto = new Set(), dev = new Map(), anul = new Map(), credPart = new Set(), cred = new Map(); // para os outros pontos (06g)
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i], ym = ymDe(r[I.data]) || ymDe(r[I.per]); if (!ym) continue;
     const icms = toNum(r[I.icms]) || 0;
@@ -4198,7 +4296,8 @@ function lerICMS(headers, rows, files) {
     if (tipo === 'E' && /^[12]206$/.test(cf)) { // anulação de prestação de serviço de transporte
       const a = anul.get(chv) || { k: chv, ch: chv, ym, data: r[I.data], num: String(r[I.num] || '').trim(), part: digits(r[I.part]), nome: String(r[I.nome] || '').trim(), cfop: cf, op: 0, icms: 0, cf: new Set() };
       if (!a.cf.has(cf)) { a.cf.add(cf); a.op += vop; } a.icms += icms; anul.set(chv, a); }
-    if (tipo === 'E' && icms > 0 && /^[123]/.test(cf) && !/^[12]206$/.test(cf)) credPart.add(digits(r[I.part]));
+    if (tipo === 'E' && icms > 0 && /^[123]/.test(cf) && !/^[12]206$/.test(cf)) { credPart.add(digits(r[I.part]));
+      const x = cred.get(kop) || { k: kop, ym, data: r[I.data], num: String(r[I.num] || '').trim(), part: digits(r[I.part]), nome: String(r[I.nome] || '').trim(), cfop: cf, icms: 0 }; x.icms += icms; cred.set(kop, x); }
     if (tipo !== 'S' || icms <= 0) continue;
     const reg = String(r[I.reg] || ''), mod = String(r[I.modelo] || '').trim();
     if (!/^D100/i.test(reg) && mod !== '57' && mod !== '67') continue;           // só conhecimento de transporte
@@ -4210,7 +4309,7 @@ function lerICMS(headers, rows, files) {
     c.bc += toNum(r[I.bc]) || 0; c.icms += icms; c.linhas.push(i); cte.set(ch, c);
   }
   const cnpj = I.cnpj >= 0 ? (rows.map(r => digits(r[I.cnpj])).find(c => c.length >= 11) || '') : '';
-  return { tipo, headers, rows, I, meses, cte, files, cnpj, periodos: {}, ativo: {}, rec, dev: [...dev.values()], anul: [...anul.values()], credPart, exclOv: {}, devOv: {}, anulOv: {} };
+  return { tipo, headers, rows, I, meses, cte, files, cnpj, periodos: {}, ativo: {}, rec, dev: [...dev.values()], anul: [...anul.values()], credPart, cred: [...cred.values()], exclOv: {}, devOv: {}, anulOv: {} };
 }
 
 /* registro 0150 dos SPEDs da EFD ICMS/IPI (.txt): inscrição estadual de cada participante em cada mês */
@@ -4368,7 +4467,7 @@ const ymFaixa = (a, b) => !a ? '' : a === b ? ymTxt(a) : ymTxt(a) + ' a ' + ymTx
 const anaSAI = () => { const a = S.tipo === 'SAI' ? S : (S.analyses.SAI && S.analyses.SAI.snap); return a && a.recs && digits(a.empresa.cnpj) === digits(S.empresa.cnpj) ? a : null; };
 const anaENT = () => { const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap); return a && a.recs && digits(a.empresa.cnpj) === digits(S.empresa.cnpj) ? a : null; };
 const aliqRegime = rg => rg === 'NC' ? { pis: 0.0165, cof: 0.076, t: '9,25%' } : rg === 'CUM' ? { pis: 0.0065, cof: 0.03, t: '3,65%' } : null;
-const corteOutros = () => (S.extras.icmsS && S.extras.icmsS.corteYm) || corte5anos();
+const corteOutros = () => (S.extras.icmsS && (S.extras.icmsS.corteOutros || S.extras.icmsS.corteYm)) || (S.extras.icmsE && S.extras.icmsE.corteOutros) || corte5anos();
 function divPC(base, al) { const tot = r2(base * (al.pis + al.cof)), pis = r2(base * al.pis); return { pis, cof: r2(tot - pis), tot }; }
 
 /* 1. exclusão do ICMS por mês (070 x 047) */
@@ -4441,12 +4540,25 @@ function analisarDevolucoes() {
   return R;
 }
 
+/* 4. crédito presumido de ICMS: quem usa o presumido não pode tomar crédito das entradas (069) no mesmo período.
+   Ficam de fora o ressarcimento de ST (1603/2603) e as anulações (1206/2206). */
+function analisarEstornoPresumido() {
+  const X = extrasDaEmpresa(), c = X.icmsE, sP = X.icmsS && X.icmsS.presumido; if (!c || !c.cred) return null;
+  const per = sP ? periodoIE(sP) : null, R = { docs: [], icms: 0, n: 0, mi: 0, ma: 0, semPeriodo: !per || per.nao };
+  if (R.semPeriodo) return R;
+  for (const d of [...c.cred].sort((a, b) => a.ym - b.ym)) {
+    if (d.ym < per.ini || d.ym > per.fim || /^[12]603$/.test(d.cfop)) continue;
+    R.docs.push(d); R.n++; R.icms += d.icms; if (!R.mi) R.mi = d.ym; R.ma = d.ym;
+  }
+  R.icms = r2(R.icms); return R;
+}
+
 /* ---------- quadro geral, no formato do diagnóstico (BLOCO, DESCRIÇÃO, PERÍODO, VALOR) ---------- */
 function quadroGeral() {
   const X = extrasDaEmpresa(), E = resumoDe('ENT'), Sa = resumoDe('SAI'), Q = quadroResumo();
   const rec = [], recolher = [], per = (a, b) => a ? ymFaixa(a, b) : 'Diversos';
   const add = (lst, bloco, desc, p, v, k) => { if (v && v > 0.004) lst.push({ bloco, desc, per: p, v: r2(v), k }); };
-  if (E) add(rec, 'PIS/COFINS', 'Notas lançadas sem crédito (037)', per(E.ini, E.fim), E.pot.pis + E.pot.cof, 'ent');
+  const le = Q.L.find(l => l.k === 'ent'); if (E && le.v) add(rec, 'PIS/COFINS', 'Notas lançadas sem crédito (037)', per(E.ini, E.fim), le.v.pis + le.v.cof, 'ent');
   const ex = Q.L.find(l => l.k === 'icms');
   if (ex && ex.v) add(rec, 'PIS/COFINS', 'Exclusão do ICMS da base de cálculo', ex.per || per(Sa && Sa.icms && Sa.icms.mi, Sa && Sa.icms && Sa.icms.ma), ex.v.pis + ex.v.cof, 'icms');
   if (Sa && Sa.cats) for (const c of Sa.cats) {
@@ -4461,6 +4573,8 @@ function quadroGeral() {
   if (ic && ic.icms > 0) { const an2 = [...ic.anos.keys()].sort(); add(rec, 'ICMS', 'ICMS indevido em prestações isentas (RS)', an2.length > 1 ? an2[0] + ' a ' + an2[an2.length - 1] : String(an2[0]), ic.icms, 'cte'); }
   const dv = analisarDevolucoes();
   if (dv && dv.icms > 0) add(rec, 'ICMS', 'Créditos não aproveitados ' + [...dv.cfops].sort().join(' e '), dv.mi === dv.ma ? ymTxt(dv.mi) : 'Diversos', dv.icms, 'dev');
+  const sst = Sa && Sa.servSemTrib; if (sst && sst.v > 0) add(recolher, 'PIS/COFINS', 'PIS/COFINS não recolhidos sobre serviços (' + sst.regs.join('/') + ', base ' + fBRL(sst.base) + ')', ymFaixa(sst.mi, sst.ma), sst.v, 'servsem');
+  const ep = analisarEstornoPresumido(); if (ep && ep.icms > 0) add(recolher, 'ICMS', 'Créditos indevidos a estornar (entradas com crédito no período do crédito presumido)', ep.mi === ep.ma ? ymTxt(ep.mi) : ymTxt(ep.mi) + ' a ' + ymTxt(ep.ma), ep.icms, 'estorno');
   if (ic && ic.presum > 0) add(recolher, 'ICMS', 'Reflexo no crédito presumido (20% do ICMS recuperado)', '', ic.presum, 'presum');
   if (ic && ic.pc > 0) add(recolher, 'PIS/COFINS', 'Reflexo da recuperação do ICMS (volta à base do PIS/COFINS)', '', ic.pc, 'reflexo');
   const tot = l => r2(l.reduce((a, x) => a + x.v, 0));
@@ -4470,14 +4584,14 @@ function quadroGeral() {
 /* ---------- tela ---------- */
 function cardPontos(X) {
   const ex = analisarExclusao(), an = analisarAnulacoes(), dv = analisarDevolucoes();
-  if (!ex && !an && !dv) return '';
+  if (!ex && !an && !dv && !X.icmsE) return '';
   let h = '<section class="card"><div class="card-h"><h2>Outros pontos · EFD ICMS/IPI x EFD-Contribuições</h2><span class="sub">exclusão do ICMS por mês · anulações 1206 · devoluções com ICMS</span></div><div class="card-b">';
   const k = [];
   if (ex) k.push(kpi('Exclusão do ICMS (070 x 047)', ex.com047 ? fBRLc(ex.pis + ex.cof) : '—', ex.com047 ? fNum(ex.n) + ' meses sem exclusão · ICMS ' + fBRL(ex.icms) : 'importe a 047'));
   if (an) k.push(kpi('Anulações 1206/2206 (069)', fBRLc(an.pis + an.cof), fNum(an.n) + ' notas sem crédito · base ' + fBRL(an.base)));
   if (dv) k.push(kpi('Devoluções com ICMS (070)', fBRLc(dv.icms), fNum(dv.n) + ' notas sem estorno' + (dv.estornado ? ' · ' + fBRL(dv.estornado) + ' estornados' : '')));
   h += '<div class="kpis">' + k.join('') + '</div>';
-  h += '<div class="toolbar" style="margin:14px 0 4px"><span style="flex:1"></span><button class="btn" data-oact="pontos-xlsx" type="button">' + ICON.dl + 'Excel dos outros pontos</button></div>';
+  h += '<div class="toolbar" style="margin:14px 0 4px;align-items:flex-end;gap:12px"><div class="field" style="max-width:230px"><label for="f-pcorte">Prazo destes pontos: a partir de</label><input type="text" id="f-pcorte" class="mono" value="' + esc(ymTxt(corteOutros())) + '" placeholder="mm/aaaa"></div><span class="small muted" style="padding-bottom:10px">Sem informar, vale o prazo do card do ICMS.</span><span style="flex:1"></span><button class="btn" data-oact="pontos-xlsx" type="button">' + ICON.dl + 'Excel dos outros pontos</button></div>';
   if (ex) {
     h += '<h3 class="small" style="margin:16px 0 6px">1. Exclusão do ICMS da base do PIS/COFINS, por mês</h3>';
     if (!ex.com047) h += '<div class="err-box">Importe a 047 desta empresa: o Revisor compara a receita da 070 menos o ICMS com a base do PIS/COFINS declarada em cada mês.</div>';
@@ -4512,6 +4626,13 @@ function cardPontos(X) {
         '<td><label class="small"><input type="checkbox" data-dv="' + esc(d.k) + '"' + (d.sel ? ' checked' : '') + (d.ym < dv.cut ? ' disabled' : '') + '> ' + esc(d.ov ? 'decisão sua' : d.st) + '</label></td></tr>').join('') + '</tbody></table></div>' : '<p class="small muted">Nenhuma devolução de compra com ICMS na 070.</p>';
     h += '<p class="small muted" style="margin-top:8px">Na devolução de compra sem crédito na entrada (uso e consumo, por exemplo), o ICMS destacado deve ser estornado por um ajuste C197. Marcadas: entram no quadro como crédito de ICMS a recuperar.</p>';
   }
+  const ep = analisarEstornoPresumido();
+  if (ep) {
+    h += '<h3 class="small" style="margin:18px 0 6px">4. Crédito presumido de ICMS x créditos das entradas (069)</h3>';
+    h += ep.semPeriodo ? '<p class="small muted">Informe o período do crédito presumido de 20% no card do ICMS (ex.: 01/2022 a 09/2025) para o Revisor procurar créditos de entrada que precisam ser estornados.</p>'
+      : ep.docs.length ? '<div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Nota</th><th>CFOP</th><th>Fornecedor</th><th class="n">ICMS creditado</th></tr></thead><tbody>' + ep.docs.map(d => '<tr><td class="mono small">' + esc(fDataBr(d.data)) + '</td><td class="mono small">' + esc(d.num) + '</td><td class="mono">' + d.cfop + '</td><td class="small">' + esc(d.nome || fmtCNPJ(d.part)) + '</td><td class="n">' + fBRL(d.icms) + '</td></tr>').join('') + '</tbody></table></div><p class="small muted" style="margin-top:8px">Quem usa o crédito presumido não pode aproveitar outros créditos de ICMS das entradas no período: o total (' + fBRL(ep.icms) + ') vai para o quadro geral como valor a estornar.</p>'
+      : '<p class="small muted">Nenhuma entrada com crédito de ICMS no período do crédito presumido.</p>';
+  }
   return h + '</div></section>';
 }
 
@@ -4526,6 +4647,7 @@ function cardQuadroGeral() {
 
 function bindPontos(e) {
   const t = e.target;
+  if (t.id === 'f-pcorte') { const p = periodoIE(t.value), c = S.extras.icmsS || S.extras.icmsE; if (c) c.corteOutros = p && p.ini ? p.ini : null; refreshOutras(); return true; }
   if (t.matches('input[data-ex]')) { const c = S.extras.icmsS, ym = +t.dataset.ex, m = analisarExclusao().meses.find(x => x.ym === ym); c.exclOv[ym] = t.checked; if (m && t.checked === m.auto) delete c.exclOv[ym]; refreshOutras(); return true; }
   if (t.matches('input[data-an]')) { const c = S.extras.icmsE, k = t.dataset.an; c.anulOv[k] = t.checked; refreshOutras(); return true; }
   if (t.matches('input[data-dv]')) { const c = S.extras.icmsS, k = t.dataset.dv; c.devOv[k] = t.checked; refreshOutras(); return true; }
@@ -4575,6 +4697,14 @@ async function buildWorkbookPontos(onProgress) {
     rows: async (emit) => {
       emit(['Data', 'Nota', 'CFOP', 'Fornecedor', 'CNPJ', 'Vlr ICMS', 'A recuperar', 'TEM AJUSTE (C197)?'], { s: XS.bHeadHl });
       for (const d of dv.docs) emit([fDataBr(d.data), d.num, d.cfop, d.nome, fmtCNPJ(d.part), { v: d.icms, s: XS.eBrlB }, { v: d.sel ? d.icms : 0, s: XS.eBrlB }, d.ov ? (d.sel ? 'incluída pela analista' : 'excluída pela analista') : d.st], { s: XS.bGen });
+    }
+  });
+  const ep = analisarEstornoPresumido();
+  if (ep && ep.docs.length) B.addSheet({
+    name: 'ESTORNO PRESUMIDO', grid: false, freeze: { row: 1 }, cols: [12, 12, 8, 46, 18, 16], filterRef: 'A1:F' + (ep.docs.length + 1),
+    rows: async (emit) => {
+      emit(['Data', 'Nota', 'CFOP', 'Fornecedor', 'CNPJ', 'ICMS creditado'], { s: XS.bHeadHl });
+      for (const d of ep.docs) emit([fDataBr(d.data), d.num, d.cfop, d.nome, fmtCNPJ(d.part), { v: d.icms, s: XS.eBrlB }], { s: XS.bGen });
     }
   });
   return B.build(onProgress);
@@ -4727,7 +4857,8 @@ function showImportError(msg) { const e = $('#imp-err'); if (e) e.innerHTML = '<
 /* Vários arquivos de uma vez: cada um é lido, reconhecido pelo cabeçalho (037 ou 047) e entra na sua análise.
    Arquivos da mesma planilha (a 037 dividida por ano, por exemplo) são unidos. */
 async function lerArquivos(files, onStep, onFile) {
-  const t0 = now(), grupos = new Map(), extras = [], speds = [], ignorados = []; let nLin = 0;
+  const t0 = now(), grupos = new Map(), extras = [], speds = [], ignorados = [], repetidos = [], vistos = new Map(); let nLin = 0;
+  const marca = rows => rows.length + '|' + JSON.stringify(rows[0] || null) + '|' + JSON.stringify(rows[rows.length - 1] || null); // o mesmo arquivo duas vezes (ou uma cópia com outro nome)
   for (let k = 0; k < files.length; k++) {
     const f = files[k], pre = files.length > 1 ? 'Arquivo ' + (k + 1) + ' de ' + files.length + ' · ' : '';
     onStep({ id: 'ler', state: 'run', detail: pre + f.name });
@@ -4737,6 +4868,9 @@ async function lerArquivos(files, onStep, onFile) {
       continue;
     }
     const wb = await readWorkbook(f, d => onStep({ id: 'ler', state: 'run', detail: pre + d }));
+    const fp = wb.headers.map(normKey).join('|') + '#' + marca(wb.rows);
+    if (vistos.has(fp)) { repetidos.push(f.name + ' (igual a ' + vistos.get(fp) + ')'); if (onFile) onFile(k, 'REPETIDO'); continue; }
+    vistos.set(fp, f.name);
     const tx = tipoExtra(wb.headers.map(normKey));
     if (tx) { extras.push({ tipo: tx, dados: tx === 'J513' ? lerJ513(wb.headers, wb.rows, [f.name]) : tx === 'ECD' ? lerECD(wb.headers, wb.rows, [f.name]) : tx === 'ICMS' ? lerICMS(wb.headers, wb.rows, [f.name]) : lerECF(wb.headers, wb.rows, [f.name]) }); if (onFile) onFile(k, tx); continue; }
     const M = mapHeaders(wb.headers);
@@ -4761,7 +4895,7 @@ async function lerArquivos(files, onStep, onFile) {
   const out = lst.map(g => ({ tipo: g.tipo, headers: g.headers, rows: g.rows, fileNames: g.fileNames, ms: ms * g.rows.length / Math.max(1, nLin) }));
   const c0 = lst.map(g => g.cnpj).find(Boolean) || (S.loaded ? digits(S.empresa.cnpj) : '');
   for (const x of extras) if (c0 && x.dados.cnpj && x.dados.cnpj !== c0) throw new Error('"' + x.dados.files[0] + '" é do CNPJ ' + fmtCNPJ(x.dados.cnpj) + ', e as planilhas da análise são do CNPJ ' + fmtCNPJ(c0) + '. Importe as planilhas de uma empresa por vez.');
-  out.extras = extras; out.speds = speds; out.ignorados = ignorados;
+  out.extras = extras; out.speds = speds; out.ignorados = ignorados; out.repetidos = repetidos;
   if (!out.length && !extras.length && !speds.length && ignorados.length) throw new Error('Os arquivos .txt enviados não são SPED da EFD ICMS/IPI: ' + ignorados.slice(0, 3).join(', ') + (ignorados.length > 3 ? '…' : '') + '. Do SPED, o Revisor lê só o registro 0150 da EFD ICMS/IPI.');
   return out;
 }
@@ -4779,6 +4913,7 @@ async function posCarga() {
     o.empresa = S.empresa; // o mesmo cadastro nas duas análises: o nome digitado vale para a 037 e a 047
   }
   if (!S.empresa.nome && c && !S.demo) { const nm = store.get(NOMES_KEY, {})[c]; if (nm) S.empresa.nome = nm; }
+  const nDec = reaplicarDecisoes(); if (nDec) setTimeout(() => toast(nDec + ' decisões da ' + MODE.planilha + ' desta empresa, feitas antes neste computador, foram reaplicadas.', 6000), 300);
   guardarAnalise();
   await carregarLogoCliente();
 }
@@ -4814,7 +4949,7 @@ async function process(input) {
     let jobs;
     if (input.demo === 'AMBAS') jobs = [{ demo: 'ENT' }, { demo: 'SAI' }];
     else if (input.demo) jobs = [{ demo: input.demo }];
-    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
+    else { const lidos = await lerArquivos(input.files, s => { st.ler = s; paint(); }, marcarArquivo); extrasLidas = lidos.extras || []; spedsLidos = lidos.speds || []; if ((lidos.ignorados || []).length) toast(lidos.ignorados.length + ' arquivo(s) .txt ignorado(s): não são SPED da EFD ICMS/IPI.', 5000); if ((lidos.repetidos || []).length) toast('Arquivo repetido, lido uma vez só: ' + lidos.repetidos.join('; '), 7000); jobs = lidos.map(pre => ({ pre, sample: input.sample })); }
     if (input.demo) (input.demo === 'AMBAS' ? ['ENT', 'SAI'] : [input.demo]).forEach((t, k) => marcarArquivo(k, t));
     for (let k = 0; k < jobs.length; k++) {
       const j = jobs[k], md = MODES[j.demo || j.pre.tipo], pref = jobs.length > 1 ? (k + 1) + ' de ' + jobs.length + ' · ' : '';
@@ -4862,6 +4997,12 @@ async function process(input) {
 function importFiles(files) { process({ demo: false, files }); }
 
 /* ---------- 2. painel ---------- */
+/* aviso: grupos em AVALIAR ainda fora do total (é a diferença mais comum com a conta feita à mão) */
+function avisoAvaliar() {
+  const p = avaliarPendente(); if (!p.n) return '';
+  return '<div class="err-box" style="margin:0 0 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>' + fNum(p.grupos) + ' grupo' + (p.grupos === 1 ? '' : 's') + ' em AVALIAR (' + fNum(p.n) + ' itens) ainda fora do total.</b> ' +
+    TX('Se forem COM CREDITO, o crédito sobe até ', 'Se forem RECUPERAR, o valor sobe até ') + fBRL(p.v) + '. Decida esses grupos antes de comparar com a planilha feita à mão.</div><button class="btn" data-go-ava="1" type="button">Decidir os grupos em AVALIAR</button></div>';
+}
 function viewPainel() {
   const T = S.totals, potT = S.pot.pis + S.pot.cof, risk = S.checks.filter(c => c.st === 'risk'), contT = risk.reduce((a, c) => a + (c.v || 0), 0);
   const per = ymLabel(S.months[0].ym) + ' a ' + ymLabel(S.months[S.months.length - 1].ym);
@@ -4872,7 +5013,7 @@ function viewPainel() {
   return '<div class="phead"><div><span class="band">Etapa 2 · Painel</span><h1><em>' + fBRL(potT) + '</em> de crédito não aproveitado</h1>' +
     '<p>' + esc(S.empresa.nome || 'CNPJ ' + fmtCNPJ(S.empresa.cnpj)) + ' · ' + per + ' · ' + fNum(T.n) + ' linhas lidas e organizadas em ' + fMs(S.procMs) + '. Valores nominais; a classificação ainda pode ser revisada.</p></div>' +
     '<div class="toolbar"><button class="btn" data-go="classificar" type="button">Revisar classificação</button><button class="btn primary" data-go="exportar" type="button">' + ICON.dl + 'Gerar Excel e Word</button></div></div>' +
-    '<div class="kpis">' +
+    avisoAvaliar() + '<div class="kpis">' +
     kpi('Linhas processadas', fNum(T.n), S.months.length + ' meses · ' + fNum(new Set(S.recs.map(r => r.registro)).size) + ' registros') +
     kpi('Entradas (Vlr Item)', fBRLc(T.vlrItem), fBRL(T.vlrItem)) +
     kpi('Crédito escriturado', fBRLc(T.pis + T.cof), 'PIS ' + fBRLc(T.pis) + ' · COFINS ' + fBRLc(T.cof)) +
@@ -4898,7 +5039,7 @@ function viewPainelSai(T, potT, per, tm, econ, comG, anos, regs) {
   return '<div class="phead"><div><span class="band">Etapa 2 · Painel · Saídas (047)</span><h1><em>' + fBRL(tot) + '</em> de PIS/COFINS pagos a maior nas vendas</h1>' +
     '<p>' + esc(S.empresa.nome || 'CNPJ ' + fmtCNPJ(S.empresa.cnpj)) + ' · ' + per + ' · ' + fNum(T.n) + ' linhas lidas e organizadas em ' + fMs(S.procMs) + '. Vendas tributadas indevidamente' + (icmsV ? ' e ICMS na base de cálculo (Tema 69)' : '') + '. Valores nominais; a classificação ainda pode ser revisada.</p></div>' +
     '<div class="toolbar"><button class="btn" data-go="classificar" type="button">Revisar classificação</button><button class="btn primary" data-go="exportar" type="button">' + ICON.dl + 'Gerar Excel e Word</button></div></div>' +
-    '<div class="kpis">' +
+    avisoAvaliar() + '<div class="kpis">' +
     kpi('Linhas processadas', fNum(T.n), S.months.length + ' meses · ' + fNum(new Set(S.recs.map(r => r.registro)).size) + ' registros') +
     kpi('Saídas (Vlr Item)', fBRLc(T.vlrItem), fBRL(T.vlrItem)) +
     kpi('PIS/COFINS sobre as vendas', fBRLc(T.pis + T.cof), 'PIS ' + fBRLc(T.pis) + ' · COFINS ' + fBRLc(T.cof)) +
@@ -5056,7 +5197,8 @@ const nomeArq = () => (S.empresa.nome.trim() || fmtCNPJ(S.empresa.cnpj)).replace
 function viewExportar() {
   const st = S.settings, tl = tiposCarregados(), falta = ['ENT', 'SAI'].filter(t => !tl.includes(t)), md = S.modelo, nomeOk = !!S.empresa.nome.trim();
   const rel = S.relatModelo && S.relatModelo.cnpj === digits(S.empresa.cnpj) ? S.relatModelo : null;
-  const linhaAn = t => { const a = anaDe(t); return '<li class="rd ok"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + '</b><div class="small muted">' + fNum(a.totals.n) + ' linhas · ' + ymLabel(a.months[0].ym) + ' a ' + ymLabel(a.months[a.months.length - 1].ym) + ' · ' + esc(a.files.join(', ')) + '</div></div><span></span></li>'; };
+  const linhaAn = t => { const a = anaDe(t), p = avaliarPendente(a); return '<li class="rd ' + (p.n ? 'warn' : 'ok') + '"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + '</b><div class="small muted">' + fNum(a.totals.n) + ' linhas · ' + ymLabel(a.months[0].ym) + ' a ' + ymLabel(a.months[a.months.length - 1].ym) + ' · ' + esc(a.files.join(', ')) + '</div>' +
+    (p.n ? '<div class="small"><b>' + fNum(p.grupos) + ' grupos em AVALIAR</b> fora do total (até ' + fBRL(p.v) + '). O Excel e o Word saem assim mesmo, com o aviso no RESUMO.</div>' : '') + '</div><span></span></li>'; };
   const linhaFalta = t => '<li class="rd warn"><span class="rd-i"></span><div><b>' + MODES[t].planilha + ' · ' + MODES[t].nome + ': ainda não importada</b><div class="small muted">' + (t === 'SAI' ? 'Sem ela, a parte das saídas (exclusão do ICMS, alíquota zero, monofásicos) fica marcada em amarelo no Word.' : 'Sem ela, a parte das entradas (notas sem crédito, relação dos NCM) fica marcada em amarelo no Word.') + '</div></div><button class="btn" data-act="pick-add" type="button">Importar a ' + MODES[t].planilha + '</button></li>';
   const temPadrao = !!modeloPadrao(), comModelo = !!md || temPadrao;
   const X5 = extrasDaEmpresa();
@@ -5085,7 +5227,8 @@ function viewExportar() {
       ((rel.amarelo || []).length ? '<details class="rep" style="margin-top:10px"><summary>' + rel.amarelo.length + ' trecho' + (rel.amarelo.length === 1 ? '' : 's') + ' de texto em amarelo para revisar</summary><ul class="rel-list pend" style="margin-top:8px">' + rel.amarelo.slice(0, 30).map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></details>' : '') + '</div></div></section>' : '') +
     '<section class="card"><div class="card-h"><h2>Dados do relatório</h2><button class="btn" data-act="perfil" type="button">Editar no perfil</button></div><div class="card-b" style="display:grid;gap:14px">' +
     '<p class="small">Assina o relatório: <b>' + esc(st.analista || 'nome não informado') + '</b>' + (S.perfil.cargo ? ', ' + esc(S.perfil.cargo) : '') + (S.perfil.oab ? ' · OAB ' + esc(S.perfil.oab) : '') + ' · ' + esc(st.escritorio || 'escritório') + ' · carta datada em <b>' + esc(st.cidade || '—') + '</b>.</p>' +
-    (tl.includes('ENT') ? '<label class="toggle"><input type="checkbox" id="f-icms"' + (st.excluirIcms ? ' checked' : '') + '><span><b>037: excluir o ICMS da base do crédito a partir de 05/2023</b><br><span class="small muted">Lei 14.592/2023. Desmarque só se houver decisão judicial em favor da empresa. Também pode ser alterado depois, na aba RESUMO do Excel.</span></span></label>' : '') +
+    (tl.includes('ENT') ? '<label class="toggle"><input type="checkbox" id="f-icms"' + (st.excluirIcms ? ' checked' : '') + '><span><b>037: excluir o ICMS da base do crédito a partir de 05/2023</b><br><span class="small muted">Lei 14.592/2023. Desmarque só se houver decisão judicial em favor da empresa. Também pode ser alterado depois, na aba RESUMO do Excel.</span></span></label>' +
+      '<label class="toggle"><input type="checkbox" id="f-desc"' + (st.descontoItem !== false ? ' checked' : '') + '><span><b>037: descontar o Vlr Desconto Item da base do crédito</b><br><span class="small muted">O crédito é sobre o valor líquido da compra. Desmarque para calcular sobre o Vlr Item cheio, como algumas planilhas da equipe. Também muda na aba RESUMO do Excel.</span></span></label>' : '') +
     '</div></section>' +
     '<h2 class="sec-h">Arquivos separados</h2><div class="exports">' +
     tl.map(t => '<section class="card xp">' + fileIcon('x', 'Planilha do Excel (.xlsx)') + '<h3>Excel ' + MODES[t].planilha + ' · ' + MODES[t].nome + '</h3><p class="small muted">' + tabsTxt(t) + '</p><div class="tabs-list">' + tabs(t).map(x => '<span>' + x + '</span>').join('') + '</div><button class="btn big" data-act="xlsx" data-tipo="' + t + '" type="button">' + ICON.dl + 'Baixar Excel ' + MODES[t].planilha + '</button></section>').join('') +
@@ -5116,6 +5259,7 @@ function bindEvents() {
   const view = $('#view');
   view.addEventListener('click', async e => {
     const t = e.target;
+    const avaBtn = t.closest('[data-go-ava]'); if (avaBtn) { S.ui.filter = 'AVA'; go('classificar'); return; }
     const goBtn = t.closest('[data-go]'); if (goBtn) { go(goBtn.dataset.go); return; }
     const f = t.closest('[data-filter]'); if (f) { S.ui.filter = f.dataset.filter; S.ui.showN = 60; render(); return; }
     const cp = t.closest('[data-copy]');
@@ -5149,6 +5293,7 @@ function bindEvents() {
     const t = e.target;
     if (t.matches('select[data-cls]')) { const g = S.groups.find(x => x.key === t.dataset.cls); setGroupCls(g, t.value); const tr = t.closest('tr'); tr.outerHTML = groupRow(g); renderChrome(); refreshClsHeader(); toast('Grupo ' + fmtNCM(g.ncm) + ' · ' + t.value); }
     if (t.matches('[data-prem]')) { const v = parseFloat(String(t.value).replace(',', '.')); if (isFinite(v) && v >= 0) { S.settings[t.dataset.prem] = v; saveSettings(); const pos = t.id; render(); const el = $('#' + pos); if (el) { el.closest('details').open = true; el.focus(); } } }
+    if (t.id === 'f-desc') { S.settings.descontoItem = t.checked; saveSettings(); recompute(); renderChrome(); toast('Crédito potencial recalculado: ' + fBRL(S.pot.pis + S.pot.cof)); }
     if (t.id === 'f-icms') { S.settings.excluirIcms = t.checked; saveSettings(); recompute(); renderChrome(); toast('Crédito potencial recalculado: ' + fBRL(S.pot.pis + S.pot.cof)); }
   });
   view.addEventListener('input', e => {

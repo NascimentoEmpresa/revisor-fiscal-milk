@@ -150,7 +150,7 @@ const CST_DESC = {
 const CF = s => new Set(s.split(' '));
 const CFOP_REVENDA = CF('101 102 111 113 116 117 118 120 121 122 401 403 652');
 const CFOP_ST = CF('401 403');
-const CFOP_SEM_AQUISICAO = CF('151 152 153 154 408 409 552 557 901 902 903 904 905 906 907 908 909 910 911 912 913 914 915 916 917 918 919 920 921');
+const CFOP_SEM_AQUISICAO = CF('151 152 153 154 408 409 552 557 603 901 902 903 904 905 906 907 908 909 910 911 912 913 914 915 916 917 918 919 920 921');
 const CFOP_USO_CONSUMO = CF('556 407');
 const CFOP_ATIVO = CF('551 406');
 const CFOP_COMBUSTIVEL = CF('653');
@@ -159,6 +159,7 @@ const CFOP_FRETE = CF('351 352 353 354 355 356 360');
 const CFOP_COMUNIC = CF('301 302 303 304 305 306');
 const CFOP_DEVOLUCAO = CF('201 202 410 411');
 const CFOP_OUTRAS = CF('949');
+const CFOP_ENTREGA_FUTURA = CF('116 117 922');
 
 /* --- NCM: regras de partida. Fonte primária: a legislação citada. A base é da Milk: cada decisão do analista vira regra. --- */
 const NCM_RULES = [
@@ -245,7 +246,9 @@ function suggest(g, kb) {
     if (CFOP_REVENDA.has(c3)) return { cls: CLS.SEM, motivo: 'Monofásico na revenda: ' + nr.nome, lei: nr.lei + '; Lei 10.833/2003, art. 3º, I, "b"', conf: 'a', origem: 'NCM' };
     return { cls: CLS.AVA, motivo: nr.nome + ' para consumo próprio: crédito só se for insumo essencial ou relevante', lei: 'Lei 10.833/2003, art. 3º, II; REsp 1.221.170/PR', conf: 'b', origem: 'NCM' };
   }
+  if (nr && nr.t === 'ZERO' && nr.sai === 'AVA') return { cls: CLS.AVA, motivo: nr.nome + ': alíquota zero ' + (nr.obs || 'conforme o uso') + '. Confira pela descrição', lei: nr.lei, conf: 'b', origem: 'NCM' };
   if (nr && nr.t === 'ZERO') return { cls: CLS.SEM, motivo: 'Alíquota zero na aquisição: ' + nr.nome, lei: nr.lei + '; Lei 10.833/2003, art. 3º, § 2º, II', conf: 'a', origem: 'NCM' };
+  if (CFOP_ENTREGA_FUTURA.has(c3)) return { cls: CLS.AVA, motivo: 'Compra com entrega futura: o crédito é tomado uma vez só, no simples faturamento (1922/2922) ou na entrega (1116/1117). Confira para não duplicar', lei: 'Lei 10.833/2003, art. 3º, I', conf: 'b', origem: 'CFOP' };
   if (CFOP_REVENDA.has(c3)) {
     const st = CFOP_ST.has(c3) ? ' (o ICMS-ST não afasta o crédito de PIS/COFINS)' : '';
     const conf = (cst === '70' || cst === '98' || cst === '99' || cst === '') ? 'a' : 'm';
@@ -259,7 +262,7 @@ function suggest(g, kb) {
   if (CFOP_COMBUSTIVEL.has(c3)) return { cls: CLS.AVA, motivo: 'Combustível para consumo: crédito só se for insumo essencial ou relevante', lei: 'Lei 10.833/2003, art. 3º, II; REsp 1.221.170/PR', conf: 'b', origem: 'CFOP' };
   if (CFOP_USO_CONSUMO.has(c3)) return { cls: CLS.AVA, motivo: 'Uso e consumo: crédito só se for insumo essencial ou relevante à atividade', lei: 'REsp 1.221.170/PR; Parecer Normativo COSIT nº 5/2018', conf: 'b', origem: 'CFOP' };
   if (CFOP_COMUNIC.has(c3)) return { cls: CLS.SEM, motivo: 'Serviço de comunicação em estabelecimento comercial (não é insumo)', lei: 'Lei 10.833/2003, art. 3º, II', conf: 'm', origem: 'CFOP' };
-  if (CFOP_OUTRAS.has(c3)) return { cls: CLS.AVA, motivo: 'Outra entrada não especificada: verificar a natureza da operação', lei: '', conf: 'b', origem: 'CFOP' };
+  if (CFOP_OUTRAS.has(c3)) return { cls: CLS.SEM, motivo: 'Outra entrada não especificada (x949): em geral sem aquisição (comodato, conserto, bonificação, ajuste). Se for compra, mude para COM CREDITO', lei: 'Lei 10.833/2003, art. 3º (crédito sobre bens adquiridos)', conf: 'm', origem: 'CFOP' };
   return { cls: CLS.AVA, motivo: 'Sem regra para o CFOP ' + (g.cfop || '—') + ': análise manual', lei: '', conf: 'b', origem: 'Sem regra' };
 }
 

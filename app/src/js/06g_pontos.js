@@ -15,7 +15,7 @@ const ymFaixa = (a, b) => !a ? '' : a === b ? ymTxt(a) : ymTxt(a) + ' a ' + ymTx
 const anaSAI = () => { const a = S.tipo === 'SAI' ? S : (S.analyses.SAI && S.analyses.SAI.snap); return a && a.recs && digits(a.empresa.cnpj) === digits(S.empresa.cnpj) ? a : null; };
 const anaENT = () => { const a = S.tipo === 'ENT' ? S : (S.analyses.ENT && S.analyses.ENT.snap); return a && a.recs && digits(a.empresa.cnpj) === digits(S.empresa.cnpj) ? a : null; };
 const aliqRegime = rg => rg === 'NC' ? { pis: 0.0165, cof: 0.076, t: '9,25%' } : rg === 'CUM' ? { pis: 0.0065, cof: 0.03, t: '3,65%' } : null;
-const corteOutros = () => (S.extras.icmsS && S.extras.icmsS.corteYm) || corte5anos();
+const corteOutros = () => (S.extras.icmsS && (S.extras.icmsS.corteOutros || S.extras.icmsS.corteYm)) || (S.extras.icmsE && S.extras.icmsE.corteOutros) || corte5anos();
 function divPC(base, al) { const tot = r2(base * (al.pis + al.cof)), pis = r2(base * al.pis); return { pis, cof: r2(tot - pis), tot }; }
 
 /* 1. exclusão do ICMS por mês (070 x 047) */
@@ -88,12 +88,25 @@ function analisarDevolucoes() {
   return R;
 }
 
+/* 4. crédito presumido de ICMS: quem usa o presumido não pode tomar crédito das entradas (069) no mesmo período.
+   Ficam de fora o ressarcimento de ST (1603/2603) e as anulações (1206/2206). */
+function analisarEstornoPresumido() {
+  const X = extrasDaEmpresa(), c = X.icmsE, sP = X.icmsS && X.icmsS.presumido; if (!c || !c.cred) return null;
+  const per = sP ? periodoIE(sP) : null, R = { docs: [], icms: 0, n: 0, mi: 0, ma: 0, semPeriodo: !per || per.nao };
+  if (R.semPeriodo) return R;
+  for (const d of [...c.cred].sort((a, b) => a.ym - b.ym)) {
+    if (d.ym < per.ini || d.ym > per.fim || /^[12]603$/.test(d.cfop)) continue;
+    R.docs.push(d); R.n++; R.icms += d.icms; if (!R.mi) R.mi = d.ym; R.ma = d.ym;
+  }
+  R.icms = r2(R.icms); return R;
+}
+
 /* ---------- quadro geral, no formato do diagnóstico (BLOCO, DESCRIÇÃO, PERÍODO, VALOR) ---------- */
 function quadroGeral() {
   const X = extrasDaEmpresa(), E = resumoDe('ENT'), Sa = resumoDe('SAI'), Q = quadroResumo();
   const rec = [], recolher = [], per = (a, b) => a ? ymFaixa(a, b) : 'Diversos';
   const add = (lst, bloco, desc, p, v, k) => { if (v && v > 0.004) lst.push({ bloco, desc, per: p, v: r2(v), k }); };
-  if (E) add(rec, 'PIS/COFINS', 'Notas lançadas sem crédito (037)', per(E.ini, E.fim), E.pot.pis + E.pot.cof, 'ent');
+  const le = Q.L.find(l => l.k === 'ent'); if (E && le.v) add(rec, 'PIS/COFINS', 'Notas lançadas sem crédito (037)', per(E.ini, E.fim), le.v.pis + le.v.cof, 'ent');
   const ex = Q.L.find(l => l.k === 'icms');
   if (ex && ex.v) add(rec, 'PIS/COFINS', 'Exclusão do ICMS da base de cálculo', ex.per || per(Sa && Sa.icms && Sa.icms.mi, Sa && Sa.icms && Sa.icms.ma), ex.v.pis + ex.v.cof, 'icms');
   if (Sa && Sa.cats) for (const c of Sa.cats) {
@@ -108,6 +121,8 @@ function quadroGeral() {
   if (ic && ic.icms > 0) { const an2 = [...ic.anos.keys()].sort(); add(rec, 'ICMS', 'ICMS indevido em prestações isentas (RS)', an2.length > 1 ? an2[0] + ' a ' + an2[an2.length - 1] : String(an2[0]), ic.icms, 'cte'); }
   const dv = analisarDevolucoes();
   if (dv && dv.icms > 0) add(rec, 'ICMS', 'Créditos não aproveitados ' + [...dv.cfops].sort().join(' e '), dv.mi === dv.ma ? ymTxt(dv.mi) : 'Diversos', dv.icms, 'dev');
+  const sst = Sa && Sa.servSemTrib; if (sst && sst.v > 0) add(recolher, 'PIS/COFINS', 'PIS/COFINS não recolhidos sobre serviços (' + sst.regs.join('/') + ', base ' + fBRL(sst.base) + ')', ymFaixa(sst.mi, sst.ma), sst.v, 'servsem');
+  const ep = analisarEstornoPresumido(); if (ep && ep.icms > 0) add(recolher, 'ICMS', 'Créditos indevidos a estornar (entradas com crédito no período do crédito presumido)', ep.mi === ep.ma ? ymTxt(ep.mi) : ymTxt(ep.mi) + ' a ' + ymTxt(ep.ma), ep.icms, 'estorno');
   if (ic && ic.presum > 0) add(recolher, 'ICMS', 'Reflexo no crédito presumido (20% do ICMS recuperado)', '', ic.presum, 'presum');
   if (ic && ic.pc > 0) add(recolher, 'PIS/COFINS', 'Reflexo da recuperação do ICMS (volta à base do PIS/COFINS)', '', ic.pc, 'reflexo');
   const tot = l => r2(l.reduce((a, x) => a + x.v, 0));
@@ -117,14 +132,14 @@ function quadroGeral() {
 /* ---------- tela ---------- */
 function cardPontos(X) {
   const ex = analisarExclusao(), an = analisarAnulacoes(), dv = analisarDevolucoes();
-  if (!ex && !an && !dv) return '';
+  if (!ex && !an && !dv && !X.icmsE) return '';
   let h = '<section class="card"><div class="card-h"><h2>Outros pontos · EFD ICMS/IPI x EFD-Contribuições</h2><span class="sub">exclusão do ICMS por mês · anulações 1206 · devoluções com ICMS</span></div><div class="card-b">';
   const k = [];
   if (ex) k.push(kpi('Exclusão do ICMS (070 x 047)', ex.com047 ? fBRLc(ex.pis + ex.cof) : '—', ex.com047 ? fNum(ex.n) + ' meses sem exclusão · ICMS ' + fBRL(ex.icms) : 'importe a 047'));
   if (an) k.push(kpi('Anulações 1206/2206 (069)', fBRLc(an.pis + an.cof), fNum(an.n) + ' notas sem crédito · base ' + fBRL(an.base)));
   if (dv) k.push(kpi('Devoluções com ICMS (070)', fBRLc(dv.icms), fNum(dv.n) + ' notas sem estorno' + (dv.estornado ? ' · ' + fBRL(dv.estornado) + ' estornados' : '')));
   h += '<div class="kpis">' + k.join('') + '</div>';
-  h += '<div class="toolbar" style="margin:14px 0 4px"><span style="flex:1"></span><button class="btn" data-oact="pontos-xlsx" type="button">' + ICON.dl + 'Excel dos outros pontos</button></div>';
+  h += '<div class="toolbar" style="margin:14px 0 4px;align-items:flex-end;gap:12px"><div class="field" style="max-width:230px"><label for="f-pcorte">Prazo destes pontos: a partir de</label><input type="text" id="f-pcorte" class="mono" value="' + esc(ymTxt(corteOutros())) + '" placeholder="mm/aaaa"></div><span class="small muted" style="padding-bottom:10px">Sem informar, vale o prazo do card do ICMS.</span><span style="flex:1"></span><button class="btn" data-oact="pontos-xlsx" type="button">' + ICON.dl + 'Excel dos outros pontos</button></div>';
   if (ex) {
     h += '<h3 class="small" style="margin:16px 0 6px">1. Exclusão do ICMS da base do PIS/COFINS, por mês</h3>';
     if (!ex.com047) h += '<div class="err-box">Importe a 047 desta empresa: o Revisor compara a receita da 070 menos o ICMS com a base do PIS/COFINS declarada em cada mês.</div>';
@@ -159,6 +174,13 @@ function cardPontos(X) {
         '<td><label class="small"><input type="checkbox" data-dv="' + esc(d.k) + '"' + (d.sel ? ' checked' : '') + (d.ym < dv.cut ? ' disabled' : '') + '> ' + esc(d.ov ? 'decisão sua' : d.st) + '</label></td></tr>').join('') + '</tbody></table></div>' : '<p class="small muted">Nenhuma devolução de compra com ICMS na 070.</p>';
     h += '<p class="small muted" style="margin-top:8px">Na devolução de compra sem crédito na entrada (uso e consumo, por exemplo), o ICMS destacado deve ser estornado por um ajuste C197. Marcadas: entram no quadro como crédito de ICMS a recuperar.</p>';
   }
+  const ep = analisarEstornoPresumido();
+  if (ep) {
+    h += '<h3 class="small" style="margin:18px 0 6px">4. Crédito presumido de ICMS x créditos das entradas (069)</h3>';
+    h += ep.semPeriodo ? '<p class="small muted">Informe o período do crédito presumido de 20% no card do ICMS (ex.: 01/2022 a 09/2025) para o Revisor procurar créditos de entrada que precisam ser estornados.</p>'
+      : ep.docs.length ? '<div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Nota</th><th>CFOP</th><th>Fornecedor</th><th class="n">ICMS creditado</th></tr></thead><tbody>' + ep.docs.map(d => '<tr><td class="mono small">' + esc(fDataBr(d.data)) + '</td><td class="mono small">' + esc(d.num) + '</td><td class="mono">' + d.cfop + '</td><td class="small">' + esc(d.nome || fmtCNPJ(d.part)) + '</td><td class="n">' + fBRL(d.icms) + '</td></tr>').join('') + '</tbody></table></div><p class="small muted" style="margin-top:8px">Quem usa o crédito presumido não pode aproveitar outros créditos de ICMS das entradas no período: o total (' + fBRL(ep.icms) + ') vai para o quadro geral como valor a estornar.</p>'
+      : '<p class="small muted">Nenhuma entrada com crédito de ICMS no período do crédito presumido.</p>';
+  }
   return h + '</div></section>';
 }
 
@@ -173,6 +195,7 @@ function cardQuadroGeral() {
 
 function bindPontos(e) {
   const t = e.target;
+  if (t.id === 'f-pcorte') { const p = periodoIE(t.value), c = S.extras.icmsS || S.extras.icmsE; if (c) c.corteOutros = p && p.ini ? p.ini : null; refreshOutras(); return true; }
   if (t.matches('input[data-ex]')) { const c = S.extras.icmsS, ym = +t.dataset.ex, m = analisarExclusao().meses.find(x => x.ym === ym); c.exclOv[ym] = t.checked; if (m && t.checked === m.auto) delete c.exclOv[ym]; refreshOutras(); return true; }
   if (t.matches('input[data-an]')) { const c = S.extras.icmsE, k = t.dataset.an; c.anulOv[k] = t.checked; refreshOutras(); return true; }
   if (t.matches('input[data-dv]')) { const c = S.extras.icmsS, k = t.dataset.dv; c.devOv[k] = t.checked; refreshOutras(); return true; }
@@ -222,6 +245,14 @@ async function buildWorkbookPontos(onProgress) {
     rows: async (emit) => {
       emit(['Data', 'Nota', 'CFOP', 'Fornecedor', 'CNPJ', 'Vlr ICMS', 'A recuperar', 'TEM AJUSTE (C197)?'], { s: XS.bHeadHl });
       for (const d of dv.docs) emit([fDataBr(d.data), d.num, d.cfop, d.nome, fmtCNPJ(d.part), { v: d.icms, s: XS.eBrlB }, { v: d.sel ? d.icms : 0, s: XS.eBrlB }, d.ov ? (d.sel ? 'incluída pela analista' : 'excluída pela analista') : d.st], { s: XS.bGen });
+    }
+  });
+  const ep = analisarEstornoPresumido();
+  if (ep && ep.docs.length) B.addSheet({
+    name: 'ESTORNO PRESUMIDO', grid: false, freeze: { row: 1 }, cols: [12, 12, 8, 46, 18, 16], filterRef: 'A1:F' + (ep.docs.length + 1),
+    rows: async (emit) => {
+      emit(['Data', 'Nota', 'CFOP', 'Fornecedor', 'CNPJ', 'ICMS creditado'], { s: XS.bHeadHl });
+      for (const d of ep.docs) emit([fDataBr(d.data), d.num, d.cfop, d.nome, fmtCNPJ(d.part), { v: d.icms, s: XS.eBrlB }], { s: XS.bGen });
     }
   });
   return B.build(onProgress);
