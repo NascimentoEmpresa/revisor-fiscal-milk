@@ -224,6 +224,7 @@ async function posCarga() {
     o.empresa = S.empresa; // o mesmo cadastro nas duas análises: o nome digitado vale para a 037 e a 047
   }
   if (!S.empresa.nome && c && !S.demo) { const nm = store.get(NOMES_KEY, {})[c]; if (nm) S.empresa.nome = nm; }
+  if (!S.demo && Object.keys(regimesForcados()).length) aplicarRegimesS(); // ECF já importada ou regime escolhido antes para este CNPJ
   const nDec = reaplicarDecisoes(); if (nDec) setTimeout(() => toast(nDec + ' decisões da ' + MODE.planilha + ' desta empresa, feitas antes neste computador, foram reaplicadas.', 6000), 300);
   guardarAnalise();
   await carregarLogoCliente();
@@ -278,6 +279,7 @@ async function process(input) {
     if (feitas.length > 1 && S.tipo !== feitas[0]) ativarAnalise(feitas[0]);
     if (spedsLidos.length) guardarSped0150(spedsLidos);
     for (const x of extrasLidas) guardarExtra(x.tipo, x.dados);
+    if (S.loaded && extrasLidas.some(x => x.tipo === 'ECF')) { reaplicarRegimes(); if (S.extras.ecdA) analisarECD(S.extras.ecdA); if (S.extras.j513) analisarJ513(S.extras.j513); }
     if (S.extras.icmsS && (spedsLidos.length || feitas.length) && !extrasLidas.some(x => x.tipo === 'ICMS' && x.dados.tipo === 'S')) analisarICMS(S.extras.icmsS);
     // se a 037 chegou depois da 513, refaz a sugestão da 513 com os fornecedores da 037
     if (feitas.includes('ENT') && S.extras.j513 && !extrasLidas.some(x => x.tipo === 'J513')) analisarJ513(S.extras.j513);
@@ -315,6 +317,18 @@ function avisoAvaliar() {
   return '<div class="err-box" style="margin:0 0 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>' + fNum(p.grupos) + ' grupo' + (p.grupos === 1 ? '' : 's') + ' em AVALIAR (' + fNum(p.n) + ' itens) ainda fora do total.</b> ' +
     TX('Se forem COM CREDITO, o crédito sobe até ', 'Se forem RECUPERAR, o valor sobe até ') + fBRL(p.v) + '. Decida esses grupos antes de comparar com a planilha feita à mão.</div><button class="btn" data-go-ava="1" type="button">Decidir os grupos em AVALIAR</button></div>';
 }
+/* regime de cada ano: automático (pela 037/047), pela ECF ou escolhido pela analista */
+function regimeAnosHtml() {
+  const F = regimesForcados(), man = store.get(REG_KEY, {})[digits(S.empresa.cnpj)] || {}, anos = [...new Set(S.months.map(m => m.ano))].sort();
+  const auto = a => { const ms = S.months.filter(m => m.ano === a); return ms.some(m => (m.regimeArq || m.regime) === 'NC') ? 'Real' : ms.some(m => (m.regimeArq || m.regime) === 'CUM') ? 'Presumido' : 'sem movimento'; };
+  const ecfAno = a => { const e = S.extras && S.extras.ecf && S.extras.ecf.anos.find(x => x.ano === a); return e ? e.trib : null; };
+  return '<div style="margin-top:14px"><div class="small muted">Regime de cada ano (vale para o crédito, as alíquotas e o Word)</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">' +
+    anos.map(a => { const v = man[a] || '', e = ecfAno(a), f = F[a];
+      return '<label class="small" style="display:flex;flex-direction:column;gap:2px"><b>' + a + '</b><select data-reg-ano="' + a + '" aria-label="Regime de ' + a + '">' +
+        '<option value=""' + (v ? '' : ' selected') + '>' + esc(e ? 'Pela ECF: ' + e : f && f.fonte !== 'analista' ? 'Pela última ECF: ' + (f.reg === 'NC' ? 'Lucro Real' : 'Lucro Presumido') : 'Automático: ' + auto(a)) + '</option><option value="NC"' + (v === 'NC' ? ' selected' : '') + '>Lucro Real</option><option value="CUM"' + (v === 'CUM' ? ' selected' : '') + '>Lucro Presumido</option></select>' +
+        '<span class="muted" style="font-size:11px">' + (f ? (f.fonte === 'analista' ? 'escolhido por você' : f.fonte === 'ECF' ? 'pela ECF' : 'segue a última ECF') : 'pela planilha') + '</span></label>'; }).join('') + '</div>' +
+    (!(S.extras && S.extras.ecf) ? '<div class="small muted" style="margin-top:6px">Importe a ECF 0000/0010 para o regime vir da forma de tributação declarada.</div>' : '') + '</div>';
+}
 function viewPainel() {
   const T = S.totals, potT = S.pot.pis + S.pot.cof, risk = S.checks.filter(c => c.st === 'risk'), contT = risk.reduce((a, c) => a + (c.v || 0), 0);
   const per = ymLabel(S.months[0].ym) + ' a ' + ymLabel(S.months[S.months.length - 1].ym);
@@ -336,7 +350,7 @@ function viewPainel() {
     '<div class="grid2"><section class="card"><div class="card-h"><h2>Crédito por mês: escriturado e não aproveitado</h2><div class="legend"><span><i style="background:var(--ink-3);opacity:.45"></i>Escriturado (PIS + COFINS)</span><span><i style="background:var(--copper)"></i>Não aproveitado</span></div></div>' +
     '<div class="card-b"><div class="chart-wrap"><div class="chart" id="chart">' + chartSvg() + '</div></div>' +
     '<div style="margin-top:14px" class="small muted">Regime por mês</div><div class="regime" style="margin-top:6px">' + S.months.map(m => '<span class="' + (m.regime === 'NC' ? '' : m.regime === 'CUM' ? 'cum' : 'none') + '" title="' + m.mes + ': ' + (m.regime === 'NC' ? 'não cumulativo' : m.regime === 'CUM' ? 'cumulativo' : 'sem crédito escriturado') + '"></span>').join('') + '</div>' +
-    '<div class="legend" style="margin-top:8px"><span><i style="background:var(--copper);opacity:.8"></i>Não cumulativo</span><span><i style="background:var(--ink-3)"></i>Cumulativo</span><span><i style="background:var(--line)"></i>Sem crédito no mês</span></div></div></section>' +
+    '<div class="legend" style="margin-top:8px"><span><i style="background:var(--copper);opacity:.8"></i>Não cumulativo</span><span><i style="background:var(--ink-3)"></i>Cumulativo</span><span><i style="background:var(--line)"></i>Sem crédito no mês</span></div>' + regimeAnosHtml() + '</div></section>' +
     timeCard(tm, econ) + '</div>' +
     '<div class="grid2 even"><section class="card"><div class="card-h"><h2>Maiores grupos com crédito não aproveitado</h2><button class="btn" data-go="classificar" type="button">Ver todos</button></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>NCM · CFOP</th><th>Produto</th><th class="n">Itens</th><th class="n">Crédito</th></tr></thead><tbody>' +
     (comG.length ? comG.map(x => '<tr class="click" data-g="' + esc(x.g.key) + '"><td class="mono">' + fmtNCM(x.g.ncm) + '<div class="xs muted">' + esc(x.g.cfop) + '</div></td><td class="ellip" style="max-width:190px" title="' + esc(x.g.descTop) + '">' + esc(x.g.descTop) + '</td><td class="n">' + fNum(x.g.n) + '</td><td class="n"><b>' + fBRL(x.v) + '</b></td></tr>').join('') : '<tr><td colspan="4" class="muted">Nenhum grupo classificado com crédito.</td></tr>') +
@@ -362,7 +376,7 @@ function viewPainelSai(T, potT, per, tm, econ, comG, anos, regs) {
     '<div class="grid2"><section class="card"><div class="card-h"><h2>PIS/COFINS por mês: débito escriturado e tributado indevidamente</h2><div class="legend"><span><i style="background:var(--ink-3);opacity:.45"></i>Débito escriturado (PIS + COFINS)</span><span><i style="background:var(--copper)"></i>Tributado indevidamente</span>' + (icmsV ? '<span><i style="background:var(--copper-light);opacity:.75"></i>ICMS na base (Tema 69)</span>' : '') + '</div></div>' +
     '<div class="card-b"><div class="chart-wrap"><div class="chart" id="chart">' + chartSvg() + '</div></div>' +
     '<div style="margin-top:14px" class="small muted">Regime por mês (pelas alíquotas das vendas)</div><div class="regime" style="margin-top:6px">' + S.months.map(m => '<span class="' + (m.regime === 'NC' ? '' : m.regime === 'CUM' ? 'cum' : 'none') + '" title="' + m.mes + ': ' + (m.regime === 'NC' ? 'não cumulativo' : m.regime === 'CUM' ? 'cumulativo' : 'sem débito escriturado') + '"></span>').join('') + '</div>' +
-    '<div class="legend" style="margin-top:8px"><span><i style="background:var(--copper);opacity:.8"></i>Não cumulativo (1,65% e 7,6%)</span><span><i style="background:var(--ink-3)"></i>Cumulativo (0,65% e 3%)</span><span><i style="background:var(--line)"></i>Sem débito no mês</span></div>' +
+    '<div class="legend" style="margin-top:8px"><span><i style="background:var(--copper);opacity:.8"></i>Não cumulativo (1,65% e 7,6%)</span><span><i style="background:var(--ink-3)"></i>Cumulativo (0,65% e 3%)</span><span><i style="background:var(--line)"></i>Sem débito no mês</span></div>' + regimeAnosHtml() +
     (semT && semT.n ? '<p class="small" style="margin-top:12px"><b>A conferir:</b> ' + esc(semT.txt) + '</p>' : '') + '</div></section>' +
     timeCard(tm, econ) + '</div>' +
     '<div class="grid2 even"><section class="card"><div class="card-h"><h2>Maiores grupos a recuperar</h2><button class="btn" data-go="classificar" type="button">Ver todos</button></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>NCM · CFOP</th><th>Produto</th><th class="n">Itens</th><th class="n">PIS + COFINS</th></tr></thead><tbody>' +
@@ -603,6 +617,7 @@ function bindEvents() {
   });
   view.addEventListener('change', e => {
     const t = e.target;
+    if (t.matches('select[data-reg-ano]')) { const y = window.scrollY; definirRegimeAno(+t.dataset.regAno, t.value); if (S.extras.ecdA) analisarECD(S.extras.ecdA); if (S.extras.j513) analisarJ513(S.extras.j513); if (S.extras.icmsS) analisarICMS(S.extras.icmsS); render(); window.scrollTo(0, y); toast('Regime de ' + t.dataset.regAno + ': ' + (t.value === 'NC' ? 'Lucro Real' : t.value === 'CUM' ? 'Lucro Presumido' : 'automático') + '. ' + (S.tipo === 'ENT' ? 'Crédito potencial: ' + fBRL(S.pot.pis + S.pot.cof) : 'Valores recalculados') + '.', 5000); return; }
     if (t.matches('select[data-cls]')) { const g = S.groups.find(x => x.key === t.dataset.cls); setGroupCls(g, t.value); const tr = t.closest('tr'); tr.outerHTML = groupRow(g); renderChrome(); refreshClsHeader(); toast('Grupo ' + fmtNCM(g.ncm) + ' · ' + t.value); }
     if (t.matches('[data-prem]')) { const v = parseFloat(String(t.value).replace(',', '.')); if (isFinite(v) && v >= 0) { S.settings[t.dataset.prem] = v; saveSettings(); const pos = t.id; render(); const el = $('#' + pos); if (el) { el.closest('details').open = true; el.focus(); } } }
     if (t.id === 'f-desc') { S.settings.descontoItem = t.checked; saveSettings(); recompute(); renderChrome(); toast('Crédito potencial recalculado: ' + fBRL(S.pot.pis + S.pot.cof)); }

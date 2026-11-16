@@ -121,6 +121,7 @@ function quadroGeral() {
   if (ic && ic.icms > 0) { const an2 = [...ic.anos.keys()].sort(); add(rec, 'ICMS', 'ICMS indevido em prestações isentas (RS)', an2.length > 1 ? an2[0] + ' a ' + an2[an2.length - 1] : String(an2[0]), ic.icms, 'cte'); }
   const dv = analisarDevolucoes();
   if (dv && dv.icms > 0) add(rec, 'ICMS', 'Créditos não aproveitados ' + [...dv.cfops].sort().join(' e '), dv.mi === dv.ma ? ymTxt(dv.mi) : 'Diversos', dv.icms, 'dev');
+  const Er = resumoDe('ENT'), cc = Er && Er.credCum; if (cc && cc.v > 0) add(recolher, 'PIS/COFINS', 'Créditos tomados em período do Lucro Presumido (indevidos)', ymFaixa(cc.mi, cc.ma), cc.v, 'credcum');
   const sst = Sa && Sa.servSemTrib; if (sst && sst.v > 0) add(recolher, 'PIS/COFINS', 'PIS/COFINS não recolhidos sobre serviços (' + sst.regs.join('/') + ', base ' + fBRL(sst.base) + ')', ymFaixa(sst.mi, sst.ma), sst.v, 'servsem');
   const ep = analisarEstornoPresumido(); if (ep && ep.icms > 0) add(recolher, 'ICMS', 'Créditos indevidos a estornar (entradas com crédito no período do crédito presumido)', ep.mi === ep.ma ? ymTxt(ep.mi) : ymTxt(ep.mi) + ' a ' + ymTxt(ep.ma), ep.icms, 'estorno');
   if (ic && ic.presum > 0) add(recolher, 'ICMS', 'Reflexo no crédito presumido (20% do ICMS recuperado)', '', ic.presum, 'presum');
@@ -296,6 +297,10 @@ function blocosDiagnostico() {
   const an = analisarAnulacoes();
   if (an && an.n) B.push({ titulo: 'ANULAÇÃO DE PRESTAÇÃO DE SERVIÇO DE TRANSPORTE', pars: [
     'Foram emitidas anulações de prestação de serviço de transporte (CFOP 1.206/2.206) em ' + fx(an.mi, an.ma) + ', período em que a empresa apurava o PIS e a COFINS no regime não cumulativo, sem o correspondente crédito na EFD-Contribuições. Sobre a base de ' + fBRL(an.base) + ' (valor anulado, descontado o ICMS) cabe o crédito de ' + fBRL(an.pis + an.cof) + ' (PIS ' + fBRL(an.pis) + ' e COFINS ' + fBRL(an.cof) + ').'] });
+  // crédito tomado no Lucro Presumido (a recolher)
+  const ccE = resumoDe('ENT') && resumoDe('ENT').credCum;
+  if (ccE && ccE.v > 0) B.push({ titulo: 'CRÉDITOS DE PIS E COFINS NO LUCRO PRESUMIDO', pars: [
+    'No período de ' + fx(ccE.mi, ccE.ma) + ', em que a empresa apurou o PIS e a COFINS no regime cumulativo (Lucro Presumido), foram escriturados créditos sobre aquisições, que esse regime não permite (Lei 10.833/2003, art. 10). Os créditos tomados indevidamente somam ' + fBRL(ccE.v) + ' (PIS ' + fBRL(ccE.pis) + ' e COFINS ' + fBRL(ccE.cof) + '), e recomenda-se o seu estorno.'] });
   // serviços sem tributação (a recolher)
   const ss = Sa && Sa.servSemTrib;
   if (ss && ss.v > 0) B.push({ titulo: 'RECEITAS DE SERVIÇO SEM TRIBUTAÇÃO DE PIS E COFINS', pars: [

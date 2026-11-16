@@ -249,6 +249,36 @@ function creditOf(r) {
   return { base: r2(base), pis: r2(base * .0165), cof: r2(base * .076) };
 }
 
+/* regime de cada ano: a ECF (forma de tributação) e a escolha da analista valem mais que o deduzido da 037/047 */
+const REG_KEY = 'revisor-fiscal-regimes-v1';
+function regimesForcados() {
+  const c = digits(S.empresa && S.empresa.cnpj || ''), R = {};
+  const ecf = S.extras && S.extras.ecf && (!S.extras.cnpj || !c || S.extras.cnpj === c) ? S.extras.ecf : null;
+  if (ecf) for (const a of ecf.anos) { const t = a.trib || '', reg = /presumid|arbitrad/i.test(t) ? 'CUM' : /real/i.test(t) ? 'NC' : null; if (reg) R[a.ano] = { reg, fonte: 'ECF' }; }
+  // anos depois da última ECF (a do ano corrente ainda não foi entregue): seguem o último regime declarado
+  if (ecf) { const ult = Object.keys(R).map(Number).sort((a, b) => b - a)[0]; if (ult && S.months) for (const a of new Set(S.months.map(m => m.ano))) if (a > ult) R[a] = { reg: R[ult].reg, fonte: 'ECF (último ano entregue)' }; }
+  const man = c ? store.get(REG_KEY, {})[c] || {} : {};
+  for (const [a, reg] of Object.entries(man)) if (reg === 'NC' || reg === 'CUM') R[a] = { reg, fonte: 'analista' };
+  return R;
+}
+function aplicarRegimesS() {
+  if (!S.months || !S.groups) return;
+  const F = S.demo ? {} : regimesForcados();
+  for (const mo of S.months) { if (mo.regimeArq == null) mo.regimeArq = mo.regime; const f = F[mo.ano]; mo.regime = f ? f.reg : mo.regimeArq; mo.regimeFonte = f ? f.fonte : (S.tipo === 'SAI' ? '047' : '037'); }
+  for (const g of S.groups) { g.ncN = 0; for (const r of g.recs) { const mo = S.monthIdx.get(r.ym); if (mo && mo.regime === 'NC') g.ncN++; } g.nc = g.ncN > 0; if (!g.dec) g.sug = (S.tipo === 'SAI' ? suggestSai : suggest)(g, S.kb); }
+  recompute();
+}
+function definirRegimeAno(ano, reg) { // reg: 'NC', 'CUM' ou '' (volta ao automático: ECF ou planilha)
+  const c = digits(S.empresa && S.empresa.cnpj || ''); if (!c) return;
+  const all = store.get(REG_KEY, {}), m = all[c] || {}; if (reg) m[ano] = reg; else delete m[ano]; all[c] = m; store.set(REG_KEY, all);
+  reaplicarRegimes();
+}
+function reaplicarRegimes() {
+  if (!S.loaded) return; const atual = S.tipo;
+  for (const t of ['ENT', 'SAI']) { if (t !== S.tipo) { if (!S.analyses[t] || digits(S.analyses[t].snap.empresa.cnpj) !== digits(S.empresa.cnpj)) continue; ativarAnalise(t); } aplicarRegimesS(); guardarAnalise(); }
+  if (S.tipo !== atual) ativarAnalise(atual);
+}
+
 /* decisões da analista por empresa (CNPJ) e planilha: voltam sozinhas se a mesma empresa for importada de novo neste navegador */
 const DEC_KEY = 'revisor-fiscal-decisoes-v1';
 function guardarDecisoes() {
@@ -307,6 +337,13 @@ function runChecks() {
     txt: (T.sepOk ? 'COM (' + fNum(T.comN) + ') + SEM (' + fNum(T.semN) + ') = ' + fNum(T.n) + ' linhas; a soma de Vlr Item confere com a base.' : 'A soma das abas não confere com a base: revisar a exportação.') + (dups ? ' ' + fNum(dups) + ' linhas repetidas (mesma chave e item).' : ' Nenhuma linha repetida.'),
     acao: dups ? 'Conferir as linhas repetidas antes de concluir.' : 'Nada a fazer.', rel: ''
   });
+  // 2b. crédito tomado em ano do Lucro Presumido (cumulativo): indevido
+  const cc = { n: 0, pis: 0, cof: 0, mi: 0, ma: 0 };
+  for (const r of S.com) { const mo = S.monthIdx.get(r.ym); if (!mo || mo.regime !== 'CUM' || !(r.vlrPis > 0 || r.vlrCof > 0)) continue; cc.n++; cc.pis += r.vlrPis || 0; cc.cof += r.vlrCof || 0; if (!cc.mi || r.ym < cc.mi) cc.mi = r.ym; if (r.ym > cc.ma) cc.ma = r.ym; }
+  S.credCum = { n: cc.n, pis: r2(cc.pis), cof: r2(cc.cof), v: r2(cc.pis + cc.cof), mi: cc.mi, ma: cc.ma };
+  add({ id: 'cred-cum', t: 'Crédito de PIS/COFINS tomado em período do Lucro Presumido', st: cc.n ? 'risk' : 'ok', n: cc.n, v: cc.n ? S.credCum.v : null,
+    txt: cc.n ? fNum(cc.n) + ' itens com crédito (' + ymLabel(cc.mi) + ' a ' + ymLabel(cc.ma) + ') em meses do regime cumulativo, que não permite crédito sobre aquisições: ' + fBRL(S.credCum.v) + ' (PIS ' + fBRL(S.credCum.pis) + ' e COFINS ' + fBRL(S.credCum.cof) + ').' : 'Nenhum crédito escriturado em período do regime cumulativo.',
+    acao: cc.n ? 'Confirmar o regime do ano (ECF) e estornar os créditos, que vão para o quadro geral como valor a recolher.' : 'Nada a fazer.', rel: '' });
   // 2. regime
   add({
     id: 'regime', t: 'Regime de apuração por período', st: semMeses.length ? 'warn' : 'info', n: nc.length, v: null,
@@ -562,6 +599,7 @@ function buildResumo() {
     for (const r of S.alvo) { const c = creditOf(r); if (!c) continue; const k = r.ncm || '-'; let x = porNcm.get(k); if (!x) porNcm.set(k, x = { ncm: r.ncm, desc: r.desc, base: 0, pis: 0, cof: 0, n: 0 }); x.base += c.base; x.pis += c.pis; x.cof += c.cof; x.n++; }
     R.ncms = [...porNcm.values()].sort((a, b) => (b.pis + b.cof) - (a.pis + a.cof));
     R.icmsCred = S.icmsEnt || null;
+    R.credCum = S.credCum || null;
     R.usoConsumo = ck['uso-consumo'] ? ck['uso-consumo'].v || 0 : 0;
     R.estoque = ck.estoque ? { st: ck.estoque.st, n: ck.estoque.n, txt: ck.estoque.txt } : null;
   } else {
@@ -584,7 +622,7 @@ function buildResumo() {
 }
 
 /* --- várias análises abertas ao mesmo tempo (a 037 e a 047 da mesma empresa) --- */
-const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt', 'servSemTrib'];
+const SNAP_KEYS = ['loaded', 'demo', 'tipo', 'files', 'empresa', 'headers', 'hkey', 'map', 'hasAnoMes', 'recs', 'com', 'sem', 'alvo', 'groups', 'months', 'monthIdx', 'totals', 'regTable', 'timings', 'procMs', 'pot', 'potYears', 'checks', 'clsCount', 'resumo', 'icmsSai', 'icmsEnt', 'servSemTrib', 'credCum'];
 S.analyses = {};
 function guardarAnalise() { if (!S.loaded) return; const snap = {}; for (const k of SNAP_KEYS) snap[k] = S[k]; S.analyses[S.tipo] = { snap }; }
 function ativarAnalise(tipo) {
